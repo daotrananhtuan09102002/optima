@@ -1,0 +1,7 @@
+datasets
+tqdm
+openai
+PyYAML
+transformers
+torch
+python-dotenv

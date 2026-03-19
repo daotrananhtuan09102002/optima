@@ -1,0 +1,35 @@
+model: gpt-4o-mini
+operator_model: gpt-4o-mini
+population_size: 100
+generations: 10
+num_runs: 5
+task_type: absa
+dataset_source: local
+dataset_name: laptop14
+train_sample_size: 1000
+validation_sample_size: 1000
+test_sample_size: 1000
+local_train_path: data/laptop14/train.jsonl
+local_validation_path: data/laptop14/validation.jsonl
+local_test_path: data/laptop14/test.jsonl
+text_field: sentence
+aspect_field: aspect
+label_field: label
+label_space:
+  - positive
+  - negative
+  - neutral
+  - conflict
+shuffle_seed: 42
+temperature: 1.0
+operator_temperature: 1.0
+max_generation_tokens: 500
+max_examples: 2
+optimization_split: validation
+report_split: test
+perplexity_model_name: roberta-base
+random_replacement_ratio: 0.1
+minimization_objectives: |
+  - Minimize the instruction performance objective value.
+  - Minimize the instruction length.
+  - Minimize the instruction perplexity.

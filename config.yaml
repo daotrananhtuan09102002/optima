@@ -1,0 +1,28 @@
+model: gpt-4o-mini
+operator_model: gpt-4o-mini
+population_size: 100
+generations: 10
+num_runs: 5
+task_type: sentence_classification
+dataset_source: huggingface
+dataset_name: glue
+dataset_subset: sst2
+train_split: train
+validation_split: validation
+test_split: validation
+train_sample_size: 100
+validation_sample_size: 100
+test_sample_size: 100
+shuffle_seed: 42
+temperature: 1.0
+operator_temperature: 1.0
+max_generation_tokens: 500
+max_examples: 2
+optimization_split: validation
+report_split: test
+perplexity_model_name: roberta-base
+random_replacement_ratio: 0.1
+minimization_objectives: |
+  - Minimize the instruction performance objective value.
+  - Minimize the instruction length.
+  - Minimize the instruction perplexity.
