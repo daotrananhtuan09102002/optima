@@ -37,6 +37,11 @@ class ExperimentConfig:
     shuffle_seed: int = 42
     temperature: float = 1.0
     operator_temperature: float | None = None
+    operator_parallel_workers: int = 4
+    operator_batch_size: int = 8
+    eval_parallel_workers: int = 1
+    eval_batch_size: int = 16
+    optimization_eval_sample_size: int | None = None
     max_generation_tokens: int = 500
     max_examples: int = 2
     minimization_objectives: str = (

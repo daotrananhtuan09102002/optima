@@ -5,3 +5,7 @@ PyYAML
 transformers>=4.52,<4.53
 torch
 python-dotenv
+accelerate>=0.33
+sentencepiece
+scikit-learn
+numpy

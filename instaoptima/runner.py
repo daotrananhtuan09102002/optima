@@ -1,5 +1,7 @@
 import random
 import statistics
+from concurrent.futures import ThreadPoolExecutor
+from typing import Literal
 
 from tqdm import tqdm
 
@@ -8,6 +10,7 @@ from instaoptima.data_loader import DatasetBundle
 from instaoptima.data_loader import ExperimentDatasetLoader
 from instaoptima.evaluator import InstructionEvaluator
 from instaoptima.instruction import Instruction
+from instaoptima.instruction import TaskExample
 from instaoptima.llm_client import LLMClient
 from instaoptima.operators import EvolutionOperators
 from instaoptima.pareto import pareto_front
@@ -57,9 +60,10 @@ class InstaOptimaExperiment:
 
         for generation in range(self.config.generations):
             print(f"\n===== Generation {generation} =====")
+            generation_dataset = self._sample_optimization_dataset(optimization_dataset)
 
             for instruction in tqdm(population):
-                self.evaluator.evaluate(instruction, optimization_dataset)
+                self.evaluator.evaluate(instruction, generation_dataset)
 
             self._log_population(population)
 
@@ -68,7 +72,7 @@ class InstaOptimaExperiment:
 
             offspring = self._generate_offspring(pareto_population)
             for child in tqdm(offspring, desc="Evaluate offspring"):
-                self.evaluator.evaluate(child, optimization_dataset)
+                self.evaluator.evaluate(child, generation_dataset)
 
             population, _ = select_next_population(
                 population=population + offspring,
@@ -86,34 +90,100 @@ class InstaOptimaExperiment:
         )
         return best_instruction
 
+    def _sample_optimization_dataset(
+        self,
+        optimization_dataset: list[TaskExample],
+    ) -> list[TaskExample]:
+        sample_size = self.config.optimization_eval_sample_size
+        if sample_size is None:
+            return optimization_dataset
+
+        bounded_size = max(1, min(int(sample_size), len(optimization_dataset)))
+        if bounded_size >= len(optimization_dataset):
+            return optimization_dataset
+        return random.sample(optimization_dataset, bounded_size)
+
     def _generate_offspring(self, pareto_population: list[Instruction]) -> list[Instruction]:
+        jobs = self._sample_offspring_jobs(pareto_population)
+        if not jobs:
+            return []
+
+        worker_count = max(1, int(self.config.operator_parallel_workers))
+        batch_size = max(1, int(self.config.operator_batch_size))
+
+        # Preserve compatibility with deterministic, sequential generation when requested.
+        if worker_count == 1:
+            return [
+                self._apply_offspring_job(job)
+                for job in tqdm(jobs, desc="Generate offspring")
+            ]
+
         offspring: list[Instruction] = []
-
-        while len(offspring) < self.config.population_size:
-            parent = random.choice(pareto_population)
-            operator = random.choice(
-                [
-                    "definition_mutation",
-                    "definition_crossover",
-                    "example_mutation",
-                    "example_crossover",
-                ]
-            )
-
-            if operator == "definition_mutation":
-                child = self.operators.mutate_definition(parent)
-            elif operator == "definition_crossover":
-                partner = random.choice(pareto_population)
-                child = self.operators.crossover_definition(parent, partner)
-            elif operator == "example_mutation":
-                child = self.operators.mutate_example(parent)
-            else:
-                partner = random.choice(pareto_population)
-                child = self.operators.crossover_example(parent, partner)
-
-            offspring.append(child)
+        with ThreadPoolExecutor(max_workers=worker_count) as executor:
+            for start_idx in range(0, len(jobs), batch_size):
+                batch = jobs[start_idx : start_idx + batch_size]
+                for child in tqdm(
+                    executor.map(self._apply_offspring_job, batch),
+                    total=len(batch),
+                    desc="Generate offspring",
+                ):
+                    offspring.append(child)
 
         return offspring
+
+    def _sample_offspring_jobs(
+        self,
+        pareto_population: list[Instruction],
+    ) -> list[tuple[Literal["definition_mutation", "definition_crossover", "example_mutation", "example_crossover"], Instruction, Instruction | None]]:
+        jobs = []
+        operators: tuple[
+            Literal[
+                "definition_mutation",
+                "definition_crossover",
+                "example_mutation",
+                "example_crossover",
+            ],
+            ...,
+        ] = (
+            "definition_mutation",
+            "definition_crossover",
+            "example_mutation",
+            "example_crossover",
+        )
+
+        while len(jobs) < self.config.population_size:
+            parent = random.choice(pareto_population)
+            operator = random.choice(operators)
+            partner = (
+                random.choice(pareto_population)
+                if operator in {"definition_crossover", "example_crossover"}
+                else None
+            )
+            jobs.append((operator, parent, partner))
+
+        return jobs
+
+    def _apply_offspring_job(
+        self,
+        job: tuple[
+            Literal[
+                "definition_mutation",
+                "definition_crossover",
+                "example_mutation",
+                "example_crossover",
+            ],
+            Instruction,
+            Instruction | None,
+        ],
+    ) -> Instruction:
+        operator, parent, partner = job
+        if operator == "definition_mutation":
+            return self.operators.mutate_definition(parent)
+        if operator == "definition_crossover":
+            return self.operators.crossover_definition(parent, partner or parent)
+        if operator == "example_mutation":
+            return self.operators.mutate_example(parent)
+        return self.operators.crossover_example(parent, partner or parent)
 
     @staticmethod
     def _log_population(population: list[Instruction]) -> None:

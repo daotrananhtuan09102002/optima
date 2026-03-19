@@ -6,9 +6,9 @@ num_runs: 5
 task_type: absa
 dataset_source: local
 dataset_name: laptop14
-train_sample_size: 1000
-validation_sample_size: 1000
-test_sample_size: 1000
+train_sample_size: 2122
+validation_sample_size: 236
+test_sample_size: 654
 local_train_path: data/laptop14/train.jsonl
 local_validation_path: data/laptop14/validation.jsonl
 local_test_path: data/laptop14/test.jsonl
@@ -23,6 +23,11 @@ label_space:
 shuffle_seed: 42
 temperature: 1.0
 operator_temperature: 1.0
+operator_parallel_workers: 12
+operator_batch_size: 24
+eval_parallel_workers: 12
+eval_batch_size: 24
+optimization_eval_sample_size: 24
 max_generation_tokens: 500
 max_examples: 2
 optimization_split: validation

@@ -1,4 +1,6 @@
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
+from itertools import repeat
 import math
 
 from instaoptima.config import ExperimentConfig
@@ -20,17 +22,41 @@ class InstructionEvaluator:
         predictions: list[str] = []
         gold_labels: list[str] = []
 
-        for example in dataset:
-            prompt = instruction.build_prompt(example, self.config)
-            prediction = self._normalize_label(self.llm_client.generate(prompt))
-            predictions.append(prediction)
-            gold_labels.append(example.label)
+        worker_count = max(1, int(self.config.eval_parallel_workers))
+        batch_size = max(1, int(self.config.eval_batch_size))
+
+        if worker_count == 1:
+            for example in dataset:
+                predictions.append(self._predict_example(instruction, example))
+                gold_labels.append(example.label)
+        else:
+            with ThreadPoolExecutor(max_workers=worker_count) as executor:
+                for start_idx in range(0, len(dataset), batch_size):
+                    batch = dataset[start_idx : start_idx + batch_size]
+                    for prediction in executor.map(
+                        self._predict_example_for_instruction,
+                        repeat(instruction, len(batch)),
+                        batch,
+                    ):
+                        predictions.append(prediction)
+                    gold_labels.extend(example.label for example in batch)
 
         metrics = self._compute_metrics(predictions, gold_labels)
         performance_objective = self._performance_objective(metrics)
         perplexity = self.perplexity_scorer.score(instruction)
         instruction.update_evaluation(metrics, performance_objective, perplexity)
         return metrics
+
+    def _predict_example(self, instruction: Instruction, example: TaskExample) -> str:
+        prompt = instruction.build_prompt(example, self.config)
+        return self._normalize_label(self.llm_client.generate(prompt))
+
+    def _predict_example_for_instruction(
+        self,
+        instruction: Instruction,
+        example: TaskExample,
+    ) -> str:
+        return self._predict_example(instruction, example)
 
     def _normalize_label(self, raw_prediction: str) -> str:
         prediction = raw_prediction.lower()
