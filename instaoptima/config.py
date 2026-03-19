@@ -28,6 +28,8 @@ class ExperimentConfig:
     local_train_path: str | None = None
     local_validation_path: str | None = None
     local_test_path: str | None = None
+    auto_download_local_dataset: bool = True
+    local_validation_ratio: float = 0.1
     text_field: str = "sentence"
     aspect_field: str | None = None
     label_field: str = "label"

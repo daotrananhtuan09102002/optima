@@ -20,6 +20,11 @@ class DatasetBundle:
 
 
 class ExperimentDatasetLoader:
+    _AUTO_ABSA_DATASETS = {
+        "laptop14": "tomaarsen/setfit-absa-semeval-laptops",
+        "restaurant14": "tomaarsen/setfit-absa-semeval-restaurants",
+    }
+
     def __init__(self, config: ExperimentConfig) -> None:
         self.config = config
 
@@ -48,6 +53,7 @@ class ExperimentDatasetLoader:
         )
 
     def _load_local_bundle(self) -> DatasetBundle:
+        self._ensure_local_dataset_exists()
         return DatasetBundle(
             train=self._load_local_file(
                 self.config.local_train_path,
@@ -63,6 +69,75 @@ class ExperimentDatasetLoader:
             ),
         )
 
+    def _ensure_local_dataset_exists(self) -> None:
+        local_paths = [
+            self.config.local_train_path,
+            self.config.local_validation_path,
+            self.config.local_test_path,
+        ]
+        if all(path and Path(path).exists() for path in local_paths):
+            return
+
+        if not self.config.auto_download_local_dataset:
+            return
+
+        if self.config.dataset_source != "local" or self.config.task_type != "absa":
+            return
+
+        dataset_id = self._AUTO_ABSA_DATASETS.get(self.config.dataset_name.lower())
+        if dataset_id is None:
+            return
+
+        if not all(local_paths):
+            raise ValueError(
+                "local_train_path, local_validation_path, and local_test_path are "
+                "required for auto-downloading a local ABSA dataset."
+            )
+
+        self._materialize_absa_dataset(dataset_id)
+
+    def _materialize_absa_dataset(self, dataset_id: str) -> None:
+        dataset = load_dataset(dataset_id)
+        train_split = dataset["train"]
+        test_split = dataset["test"]
+
+        if "validation" in dataset:
+            validation_split = dataset["validation"]
+        else:
+            split_dataset = train_split.train_test_split(
+                test_size=self.config.local_validation_ratio,
+                seed=self.config.shuffle_seed,
+            )
+            train_split = split_dataset["train"]
+            validation_split = split_dataset["test"]
+
+        self._write_jsonl_split(train_split, self.config.local_train_path)
+        self._write_jsonl_split(validation_split, self.config.local_validation_path)
+        self._write_jsonl_split(test_split, self.config.local_test_path)
+
+    def _write_jsonl_split(self, split, destination: str | None) -> None:
+        if not destination:
+            raise ValueError("Destination path is required to write a local dataset split.")
+
+        path = Path(destination)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        lines = [
+            json.dumps(self._normalize_absa_record(dict(record)), ensure_ascii=False)
+            for record in split
+        ]
+        path.write_text("\n".join(lines), encoding="utf-8")
+
+    @staticmethod
+    def _normalize_absa_record(record: dict) -> dict[str, str]:
+        text = str(record.get("sentence", record.get("text", ""))).strip()
+        aspect = str(record.get("aspect", record.get("span", ""))).strip()
+        label = str(record.get("label", "")).strip().lower()
+        return {
+            "sentence": text,
+            "aspect": aspect,
+            "label": label,
+        }
+
     def _select_records(self, split, sample_size: int) -> list[TaskExample]:
         sample_count = min(sample_size, len(split))
         sampled = split.shuffle(seed=self.config.shuffle_seed).select(range(sample_count))
@@ -77,6 +152,13 @@ class ExperimentDatasetLoader:
             raise ValueError("Local dataset path is required when dataset_source=local.")
 
         path = Path(file_path)
+        if not path.exists():
+            resolved_path = path.resolve(strict=False)
+            raise FileNotFoundError(
+                "Local dataset file not found: "
+                f"'{file_path}' (resolved: '{resolved_path}'). "
+                "Please add the dataset file or update the config paths."
+            )
         if path.suffix == ".jsonl":
             rows = [
                 json.loads(line)

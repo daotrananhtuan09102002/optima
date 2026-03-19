@@ -19,6 +19,7 @@ class PromptPerplexityScorer:
         self.config = config
         self._tokenizer = None
         self._model = None
+        self._backend_unavailable = False
 
     def score(self, instruction: Instruction) -> float:
         prompt_text = instruction.definition
@@ -33,6 +34,8 @@ class PromptPerplexityScorer:
 
         tokenizer = self._get_tokenizer()
         model = self._get_model()
+        if tokenizer is None or model is None:
+            return float(len(prompt_text.split()))
         encoded = tokenizer(prompt_text, return_tensors="pt", truncation=True)
         input_ids = encoded["input_ids"]
         attention_mask = encoded["attention_mask"]
@@ -56,16 +59,28 @@ class PromptPerplexityScorer:
         return math.exp(total_loss / (token_count - 2))
 
     def _get_tokenizer(self):
+        if self._backend_unavailable:
+            return None
         if self._tokenizer is None:
-            self._tokenizer = RobertaTokenizerFast.from_pretrained(
-                self.config.perplexity_model_name
-            )
+            try:
+                self._tokenizer = RobertaTokenizerFast.from_pretrained(
+                    self.config.perplexity_model_name
+                )
+            except (ImportError, OSError):  # pragma: no cover
+                self._backend_unavailable = True
+                return None
         return self._tokenizer
 
     def _get_model(self):
+        if self._backend_unavailable:
+            return None
         if self._model is None:
-            self._model = RobertaForMaskedLM.from_pretrained(
-                self.config.perplexity_model_name
-            )
+            try:
+                self._model = RobertaForMaskedLM.from_pretrained(
+                    self.config.perplexity_model_name
+                )
+            except (ImportError, OSError):  # pragma: no cover
+                self._backend_unavailable = True
+                return None
             self._model.eval()
         return self._model
