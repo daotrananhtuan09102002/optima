@@ -1,4 +1,5 @@
 import gc
+import inspect
 import shutil
 import tempfile
 from pathlib import Path
@@ -59,30 +60,7 @@ class FlanT5ObjectiveEvaluator:
 
         data_collator = DataCollatorForSeq2Seq(tokenizer=tokenizer, model=model)
         output_dir = self._make_training_output_dir()
-        training_args = Seq2SeqTrainingArguments(
-            output_dir=output_dir,
-            overwrite_output_dir=True,
-            do_train=True,
-            do_eval=False,
-            evaluation_strategy="no",
-            save_strategy="no",
-            logging_strategy="no",
-            report_to=[],
-            per_device_train_batch_size=self.config.task_model_train_batch_size,
-            per_device_eval_batch_size=self.config.task_model_eval_batch_size,
-            gradient_accumulation_steps=self.config.task_model_gradient_accumulation_steps,
-            learning_rate=self.config.task_model_learning_rate,
-            weight_decay=self.config.task_model_weight_decay,
-            warmup_ratio=self.config.task_model_warmup_ratio,
-            num_train_epochs=self.config.task_model_train_epochs,
-            seed=self.config.shuffle_seed,
-            data_seed=self.config.shuffle_seed,
-            remove_unused_columns=True,
-            disable_tqdm=True,
-            use_cpu=self._use_cpu(),
-            fp16=self._use_fp16(),
-            bf16=self._use_bf16(),
-        )
+        training_args = self._build_training_args(output_dir)
         trainer = Seq2SeqTrainer(
             model=model,
             args=training_args,
@@ -177,6 +155,49 @@ class FlanT5ObjectiveEvaluator:
             root.mkdir(parents=True, exist_ok=True)
             return tempfile.mkdtemp(prefix="instaoptima-flan-", dir=root)
         return tempfile.mkdtemp(prefix="instaoptima-flan-")
+
+    def _build_training_args(self, output_dir: str):
+        candidate_kwargs = {
+            "output_dir": output_dir,
+            "overwrite_output_dir": True,
+            "do_train": True,
+            "do_eval": False,
+            "evaluation_strategy": "no",
+            "eval_strategy": "no",
+            "save_strategy": "no",
+            "logging_strategy": "no",
+            "report_to": [],
+            "per_device_train_batch_size": self.config.task_model_train_batch_size,
+            "per_device_eval_batch_size": self.config.task_model_eval_batch_size,
+            "gradient_accumulation_steps": self.config.task_model_gradient_accumulation_steps,
+            "learning_rate": self.config.task_model_learning_rate,
+            "weight_decay": self.config.task_model_weight_decay,
+            "warmup_ratio": self.config.task_model_warmup_ratio,
+            "num_train_epochs": self.config.task_model_train_epochs,
+            "seed": self.config.shuffle_seed,
+            "data_seed": self.config.shuffle_seed,
+            "remove_unused_columns": True,
+            "disable_tqdm": True,
+            "use_cpu": self._use_cpu(),
+            "fp16": self._use_fp16(),
+            "bf16": self._use_bf16(),
+        }
+        supported_parameters = inspect.signature(
+            Seq2SeqTrainingArguments.__init__
+        ).parameters
+        filtered_kwargs = {
+            key: value
+            for key, value in candidate_kwargs.items()
+            if key in supported_parameters
+        }
+
+        if (
+            "evaluation_strategy" in filtered_kwargs
+            and "eval_strategy" in filtered_kwargs
+        ):
+            filtered_kwargs.pop("eval_strategy")
+
+        return Seq2SeqTrainingArguments(**filtered_kwargs)
 
     @staticmethod
     def _cleanup_model(model) -> None:
