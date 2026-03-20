@@ -4,9 +4,9 @@ task_model_name: google/flan-t5-base
 population_size: 100
 generations: 10
 num_runs: 5
-task_type: sentence_classification
+task_type: absa
 dataset_source: huggingface
-dataset_name: glue
+dataset_name: laptop14
 dataset_subset: sst2
 train_split: train
 validation_split: null
