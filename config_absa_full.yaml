@@ -4,16 +4,25 @@ task_model_name: google/flan-t5-base
 population_size: 100
 generations: 10
 num_runs: 5
-task_type: sentence_classification
-dataset_source: huggingface
-dataset_name: glue
-dataset_subset: sst2
-train_split: train
-validation_split: null
-test_split: validation
-train_sample_size: 1000
+task_type: absa
+dataset_source: local
+dataset_name: laptop14
+train_sample_size: null
 validation_sample_size: null
 test_sample_size: null
+local_train_path: data/laptop14/train.jsonl
+local_validation_path: data/laptop14/validation.jsonl
+local_test_path: data/laptop14/test.jsonl
+auto_download_local_dataset: true
+local_validation_ratio: 0.1
+text_field: sentence
+aspect_field: aspect
+label_field: label
+label_space:
+  - positive
+  - negative
+  - neutral
+  - conflict
 shuffle_seed: 42
 temperature: 1.0
 operator_temperature: 1.0

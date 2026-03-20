@@ -67,6 +67,15 @@ class Instruction:
             f"perplexity={self.objectives.perplexity:.6f}"
         )
 
+    def cache_key(self) -> tuple[str, tuple[tuple[str, str, str | None], ...]]:
+        return (
+            self.definition,
+            tuple(
+                (example.text, example.label, example.aspect)
+                for example in self.examples
+            ),
+        )
+
     @staticmethod
     def _format_example(
         example: TaskExample,

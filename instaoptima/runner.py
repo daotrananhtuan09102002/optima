@@ -1,6 +1,5 @@
 import random
 import statistics
-from concurrent.futures import ThreadPoolExecutor
 from typing import Literal
 
 from tqdm import tqdm
@@ -10,12 +9,19 @@ from instaoptima.data_loader import DatasetBundle
 from instaoptima.data_loader import ExperimentDatasetLoader
 from instaoptima.evaluator import InstructionEvaluator
 from instaoptima.instruction import Instruction
-from instaoptima.instruction import TaskExample
 from instaoptima.llm_client import LLMClient
 from instaoptima.operators import EvolutionOperators
 from instaoptima.pareto import pareto_front
 from instaoptima.pareto import select_next_population
 from instaoptima.population import PopulationFactory
+
+
+OperatorName = Literal[
+    "definition_mutation",
+    "definition_crossover",
+    "example_mutation",
+    "example_crossover",
+]
 
 
 class InstaOptimaExperiment:
@@ -29,22 +35,27 @@ class InstaOptimaExperiment:
 
     def run(self) -> None:
         dataset_bundle = self.dataset_loader.load()
-        run_scores = []
+        run_scores: list[float] = []
 
         for run_index in range(self.config.num_runs):
             print(f"\n========== Run {run_index + 1}/{self.config.num_runs} ==========")
-            best_instruction = self._run_single_experiment(dataset_bundle, run_index)
-            test_metrics = self.evaluator.evaluate(
-                best_instruction,
-                dataset_bundle.get_split(self.config.report_split),
+            final_population, final_pareto = self._run_single_experiment(
+                dataset_bundle,
+                run_index,
             )
-            run_scores.append(test_metrics["accuracy"])
+            self._log_pareto_front(final_pareto, title="Final Pareto Front")
+
+            representative = max(
+                final_pareto or final_population,
+                key=lambda item: item.metrics.get("accuracy", 0.0),
+            )
+            run_scores.append(representative.metrics.get("accuracy", 0.0))
             print(
-                "Final test metrics: "
-                f"acc={test_metrics['accuracy']:.4f}, "
-                f"macro_f1={test_metrics['macro_f1']:.4f}, "
-                f"macro_precision={test_metrics['macro_precision']:.4f}, "
-                f"macro_recall={test_metrics['macro_recall']:.4f}"
+                "Representative metrics: "
+                f"acc={representative.metrics.get('accuracy', 0.0):.4f}, "
+                f"macro_f1={representative.metrics.get('macro_f1', 0.0):.4f}, "
+                f"macro_precision={representative.metrics.get('macro_precision', 0.0):.4f}, "
+                f"macro_recall={representative.metrics.get('macro_recall', 0.0):.4f}"
             )
 
         self._log_run_summary(run_scores)
@@ -53,140 +64,100 @@ class InstaOptimaExperiment:
         self,
         dataset_bundle: DatasetBundle,
         run_index: int,
-    ) -> Instruction:
+    ) -> tuple[list[Instruction], list[Instruction]]:
         random.seed(self.config.shuffle_seed + run_index)
-        population = self.population_factory.create_initial_population(dataset_bundle.train)
-        optimization_dataset = dataset_bundle.get_split(self.config.optimization_split)
+        train_dataset = dataset_bundle.train
+        test_dataset = dataset_bundle.test
 
-        for generation in range(self.config.generations):
-            print(f"\n===== Generation {generation} =====")
-            generation_dataset = self._sample_optimization_dataset(optimization_dataset)
+        population = self.population_factory.create_initial_population(train_dataset)
+        self._evaluate_population(
+            population,
+            train_dataset,
+            test_dataset,
+            desc="Evaluate initial population",
+        )
+        self._log_population(population, title="Initial Population")
 
-            for instruction in tqdm(population):
-                self.evaluator.evaluate(instruction, generation_dataset)
-
-            self._log_population(population)
-
-            pareto_population = pareto_front(population)
-            self._log_pareto_front(pareto_population)
-
-            offspring = self._generate_offspring(pareto_population)
-            for child in tqdm(offspring, desc="Evaluate offspring"):
-                self.evaluator.evaluate(child, generation_dataset)
-
-            population, _ = select_next_population(
+        for generation in range(1, self.config.generations + 1):
+            print(f"\n===== Generation {generation}/{self.config.generations} =====")
+            offspring = self._generate_and_evaluate_offspring(
+                population,
+                train_dataset,
+                test_dataset,
+            )
+            population, generation_pareto = select_next_population(
                 population=population + offspring,
                 population_size=self.config.population_size,
-                random_replacement_ratio=self.config.random_replacement_ratio,
+            )
+            self._log_population(population, title="Selected Population")
+            self._log_pareto_front(generation_pareto)
+
+        return population, pareto_front(population)
+
+    def _evaluate_population(
+        self,
+        population: list[Instruction],
+        train_dataset,
+        test_dataset,
+        desc: str,
+    ) -> None:
+        for instruction in tqdm(population, desc=desc):
+            self.evaluator.evaluate(
+                instruction=instruction,
+                train_dataset=train_dataset,
+                test_dataset=test_dataset,
             )
 
-        best_instruction = min(
-            population,
-            key=lambda item: (
-                item.objectives.performance,
-                item.objectives.perplexity,
-                item.objectives.length,
-            ),
-        )
-        return best_instruction
-
-    def _sample_optimization_dataset(
+    def _generate_and_evaluate_offspring(
         self,
-        optimization_dataset: list[TaskExample],
-    ) -> list[TaskExample]:
-        sample_size = self.config.optimization_eval_sample_size
-        if sample_size is None:
-            return optimization_dataset
-
-        bounded_size = max(1, min(int(sample_size), len(optimization_dataset)))
-        if bounded_size >= len(optimization_dataset):
-            return optimization_dataset
-        return random.sample(optimization_dataset, bounded_size)
-
-    def _generate_offspring(self, pareto_population: list[Instruction]) -> list[Instruction]:
-        jobs = self._sample_offspring_jobs(pareto_population)
-        if not jobs:
-            return []
-
-        worker_count = max(1, int(self.config.operator_parallel_workers))
-        batch_size = max(1, int(self.config.operator_batch_size))
-
-        # Preserve compatibility with deterministic, sequential generation when requested.
-        if worker_count == 1:
-            return [
-                self._apply_offspring_job(job)
-                for job in tqdm(jobs, desc="Generate offspring")
-            ]
-
+        population: list[Instruction],
+        train_dataset,
+        test_dataset,
+    ) -> list[Instruction]:
         offspring: list[Instruction] = []
-        with ThreadPoolExecutor(max_workers=worker_count) as executor:
-            for start_idx in range(0, len(jobs), batch_size):
-                batch = jobs[start_idx : start_idx + batch_size]
-                for child in tqdm(
-                    executor.map(self._apply_offspring_job, batch),
-                    total=len(batch),
-                    desc="Generate offspring",
-                ):
-                    offspring.append(child)
+        for _ in tqdm(
+            range(self.config.population_size),
+            desc="Generate and evaluate offspring",
+        ):
+            first_parent = random.choice(population)
+            second_parent = random.choice(population)
+            operator = random.choice(self._available_operators())
+            child = self._apply_operator(operator, first_parent, second_parent)
+            self.evaluator.evaluate(
+                instruction=child,
+                train_dataset=train_dataset,
+                test_dataset=test_dataset,
+            )
+            offspring.append(child)
 
         return offspring
 
-    def _sample_offspring_jobs(
-        self,
-        pareto_population: list[Instruction],
-    ) -> list[tuple[Literal["definition_mutation", "definition_crossover", "example_mutation", "example_crossover"], Instruction, Instruction | None]]:
-        jobs = []
-        operators: tuple[
-            Literal[
-                "definition_mutation",
-                "definition_crossover",
-                "example_mutation",
-                "example_crossover",
-            ],
-            ...,
-        ] = (
+    @staticmethod
+    def _available_operators() -> tuple[OperatorName, ...]:
+        return (
             "definition_mutation",
             "definition_crossover",
             "example_mutation",
             "example_crossover",
         )
 
-        while len(jobs) < self.config.population_size:
-            parent = random.choice(pareto_population)
-            operator = random.choice(operators)
-            partner = (
-                random.choice(pareto_population)
-                if operator in {"definition_crossover", "example_crossover"}
-                else None
-            )
-            jobs.append((operator, parent, partner))
-
-        return jobs
-
-    def _apply_offspring_job(
+    def _apply_operator(
         self,
-        job: tuple[
-            Literal[
-                "definition_mutation",
-                "definition_crossover",
-                "example_mutation",
-                "example_crossover",
-            ],
-            Instruction,
-            Instruction | None,
-        ],
+        operator: OperatorName,
+        first_parent: Instruction,
+        second_parent: Instruction,
     ) -> Instruction:
-        operator, parent, partner = job
         if operator == "definition_mutation":
-            return self.operators.mutate_definition(parent)
+            return self.operators.mutate_definition(first_parent)
         if operator == "definition_crossover":
-            return self.operators.crossover_definition(parent, partner or parent)
+            return self.operators.crossover_definition(first_parent, second_parent)
         if operator == "example_mutation":
-            return self.operators.mutate_example(parent)
-        return self.operators.crossover_example(parent, partner or parent)
+            return self.operators.mutate_example(first_parent)
+        return self.operators.crossover_example(first_parent, second_parent)
 
     @staticmethod
-    def _log_population(population: list[Instruction]) -> None:
+    def _log_population(population: list[Instruction], title: str) -> None:
+        print(f"\n{title}:")
         for instruction in population:
             print(
                 "PerfObj: "
@@ -198,14 +169,18 @@ class InstaOptimaExperiment:
             )
 
     @staticmethod
-    def _log_pareto_front(pareto_population: list[Instruction]) -> None:
-        print("\nPareto Front:")
+    def _log_pareto_front(
+        pareto_population: list[Instruction],
+        title: str = "Pareto Front",
+    ) -> None:
+        print(f"\n{title}:")
         for instruction in pareto_population:
             print(
                 "PerfObj: "
                 f"{instruction.objectives.performance:.6f}, "
                 f"Len: {instruction.objectives.length:.1f}, "
-                f"PPL: {instruction.objectives.perplexity:.6f}"
+                f"PPL: {instruction.objectives.perplexity:.6f}, "
+                f"Acc: {instruction.metrics.get('accuracy', 0.0):.4f}"
             )
 
     @staticmethod
@@ -217,5 +192,6 @@ class InstaOptimaExperiment:
         std_score = statistics.stdev(run_scores) if len(run_scores) > 1 else 0.0
         print(
             "\n===== Summary =====\n"
-            f"Accuracy over {len(run_scores)} runs: {mean_score * 100:.2f} +- {std_score * 100:.2f}"
+            f"Representative accuracy over {len(run_scores)} runs: "
+            f"{mean_score * 100:.2f} +- {std_score * 100:.2f}"
         )

@@ -1,62 +1,70 @@
 from collections import Counter
-from concurrent.futures import ThreadPoolExecutor
-from itertools import repeat
+from dataclasses import dataclass
 import math
 
 from instaoptima.config import ExperimentConfig
+from instaoptima.flan_t5_evaluator import FlanT5ObjectiveEvaluator
 from instaoptima.instruction import Instruction
 from instaoptima.instruction import TaskExample
 from instaoptima.llm_client import LLMClient
 from instaoptima.perplexity import PromptPerplexityScorer
 
 
+@dataclass(frozen=True)
+class CachedInstructionEvaluation:
+    metrics: dict[str, float]
+    performance_objective: float
+    perplexity: float
+
+
 class InstructionEvaluator:
-    def __init__(self, llm_client: LLMClient, config: ExperimentConfig) -> None:
+    def __init__(
+        self,
+        llm_client: LLMClient | None,
+        config: ExperimentConfig,
+    ) -> None:
         self.llm_client = llm_client
         self.config = config
         self.perplexity_scorer = PromptPerplexityScorer(config)
+        self.task_model_evaluator = FlanT5ObjectiveEvaluator(config)
+        self._evaluation_cache: dict[tuple[str, tuple[tuple[str, str, str | None], ...]], CachedInstructionEvaluation] = {}
 
     def evaluate(
-        self, instruction: Instruction, dataset: list[TaskExample]
-    ) -> dict[str, float]:
-        predictions: list[str] = []
-        gold_labels: list[str] = []
-
-        worker_count = max(1, int(self.config.eval_parallel_workers))
-        batch_size = max(1, int(self.config.eval_batch_size))
-
-        if worker_count == 1:
-            for example in dataset:
-                predictions.append(self._predict_example(instruction, example))
-                gold_labels.append(example.label)
-        else:
-            with ThreadPoolExecutor(max_workers=worker_count) as executor:
-                for start_idx in range(0, len(dataset), batch_size):
-                    batch = dataset[start_idx : start_idx + batch_size]
-                    for prediction in executor.map(
-                        self._predict_example_for_instruction,
-                        repeat(instruction, len(batch)),
-                        batch,
-                    ):
-                        predictions.append(prediction)
-                    gold_labels.extend(example.label for example in batch)
-
-        metrics = self._compute_metrics(predictions, gold_labels)
-        performance_objective = self._performance_objective(metrics)
-        perplexity = self.perplexity_scorer.score(instruction)
-        instruction.update_evaluation(metrics, performance_objective, perplexity)
-        return metrics
-
-    def _predict_example(self, instruction: Instruction, example: TaskExample) -> str:
-        prompt = instruction.build_prompt(example, self.config)
-        return self._normalize_label(self.llm_client.generate(prompt))
-
-    def _predict_example_for_instruction(
         self,
         instruction: Instruction,
-        example: TaskExample,
-    ) -> str:
-        return self._predict_example(instruction, example)
+        train_dataset: list[TaskExample],
+        test_dataset: list[TaskExample],
+    ) -> dict[str, float]:
+        cache_key = instruction.cache_key()
+        cached_result = self._evaluation_cache.get(cache_key)
+
+        if cached_result is None:
+            predictions = self.task_model_evaluator.evaluate(
+                instruction=instruction,
+                train_dataset=train_dataset,
+                test_dataset=test_dataset,
+            )
+            gold_labels = [example.label for example in test_dataset]
+            normalized_predictions = [
+                self._normalize_label(prediction)
+                for prediction in predictions
+            ]
+            metrics = self._compute_metrics(normalized_predictions, gold_labels)
+            performance_objective = self._performance_objective(metrics)
+            perplexity = self.perplexity_scorer.score(instruction)
+            cached_result = CachedInstructionEvaluation(
+                metrics=metrics,
+                performance_objective=performance_objective,
+                perplexity=perplexity,
+            )
+            self._evaluation_cache[cache_key] = cached_result
+
+        instruction.update_evaluation(
+            dict(cached_result.metrics),
+            cached_result.performance_objective,
+            cached_result.perplexity,
+        )
+        return instruction.metrics
 
     def _normalize_label(self, raw_prediction: str) -> str:
         prediction = raw_prediction.lower()
@@ -81,6 +89,7 @@ class InstructionEvaluator:
                 "macro_precision": 0.0,
                 "macro_recall": 0.0,
                 "macro_f1": 0.0,
+                "prediction_entropy": 0.0,
             }
 
         labels = self.config.label_space or sorted(set(gold_labels))
@@ -123,13 +132,19 @@ class InstructionEvaluator:
         }
 
     def _performance_objective(self, metrics: dict[str, float]) -> float:
-        metric_sum = sum(metrics.get(metric_name, 0.0) for metric_name in self.config.performance_metric_names)
+        metric_sum = sum(
+            metrics.get(metric_name, 0.0)
+            for metric_name in self.config.performance_metric_names
+        )
         if metric_sum == 0:
             return float("inf")
         return 1.0 / metric_sum
 
     @staticmethod
     def _prediction_entropy(predictions: list[str]) -> float:
+        if not predictions:
+            return 0.0
+
         counts = Counter(predictions)
         total = len(predictions)
         entropy = 0.0

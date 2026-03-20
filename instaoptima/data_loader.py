@@ -1,5 +1,6 @@
 import csv
 import json
+import random
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -42,8 +43,9 @@ class ExperimentDatasetLoader:
                 dataset[self.config.train_split],
                 self.config.train_sample_size,
             ),
-            validation=self._select_records(
-                dataset[self.config.validation_split],
+            validation=self._load_optional_huggingface_split(
+                dataset,
+                self.config.validation_split,
                 self.config.validation_sample_size,
             ),
             test=self._select_records(
@@ -59,7 +61,7 @@ class ExperimentDatasetLoader:
                 self.config.local_train_path,
                 self.config.train_sample_size,
             ),
-            validation=self._load_local_file(
+            validation=self._load_optional_local_file(
                 self.config.local_validation_path,
                 self.config.validation_sample_size,
             ),
@@ -138,15 +140,18 @@ class ExperimentDatasetLoader:
             "label": label,
         }
 
-    def _select_records(self, split, sample_size: int) -> list[TaskExample]:
-        sample_count = min(sample_size, len(split))
+    def _select_records(self, split, sample_size: int | None) -> list[TaskExample]:
+        if sample_size is None:
+            sample_count = len(split)
+        else:
+            sample_count = min(int(sample_size), len(split))
         sampled = split.shuffle(seed=self.config.shuffle_seed).select(range(sample_count))
         return [self._record_to_example(dict(record)) for record in sampled]
 
     def _load_local_file(
         self,
         file_path: str | None,
-        sample_size: int,
+        sample_size: int | None,
     ) -> list[TaskExample]:
         if not file_path:
             raise ValueError("Local dataset path is required when dataset_source=local.")
@@ -173,7 +178,33 @@ class ExperimentDatasetLoader:
         else:
             raise ValueError(f"Unsupported local dataset format: {path.suffix}")
 
-        return [self._record_to_example(row) for row in rows[:sample_size]]
+        shuffled_rows = list(rows)
+        random.Random(self.config.shuffle_seed).shuffle(shuffled_rows)
+        selected_rows = (
+            shuffled_rows
+            if sample_size is None
+            else shuffled_rows[: int(sample_size)]
+        )
+        return [self._record_to_example(row) for row in selected_rows]
+
+    def _load_optional_huggingface_split(
+        self,
+        dataset,
+        split_name: str | None,
+        sample_size: int | None,
+    ) -> list[TaskExample]:
+        if not split_name or split_name not in dataset:
+            return []
+        return self._select_records(dataset[split_name], sample_size)
+
+    def _load_optional_local_file(
+        self,
+        file_path: str | None,
+        sample_size: int | None,
+    ) -> list[TaskExample]:
+        if not file_path:
+            return []
+        return self._load_local_file(file_path, sample_size)
 
     def _record_to_example(self, record: dict) -> TaskExample:
         label_value = record[self.config.label_field]

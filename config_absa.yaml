@@ -1,5 +1,6 @@
 model: gpt-4o-mini
 operator_model: gpt-4o-mini
+task_model_name: google/flan-t5-base
 population_size: 100
 generations: 10
 num_runs: 5
@@ -23,17 +24,18 @@ label_space:
 shuffle_seed: 42
 temperature: 1.0
 operator_temperature: 1.0
-operator_parallel_workers: 12
-operator_batch_size: 24
-eval_parallel_workers: 12
-eval_batch_size: 24
-optimization_eval_sample_size: 24
 max_generation_tokens: 500
 max_examples: 2
-optimization_split: validation
-report_split: test
+task_model_train_epochs: 1.0
+task_model_learning_rate: 5.0e-5
+task_model_train_batch_size: 4
+task_model_eval_batch_size: 8
+task_model_max_source_length: 512
+task_model_max_target_length: 16
+task_model_generation_max_new_tokens: 8
+task_model_device: auto
 perplexity_model_name: roberta-base
-random_replacement_ratio: 0.1
+random_replacement_ratio: 0.0
 minimization_objectives: |
   - Minimize the instruction performance objective value.
   - Minimize the instruction length.

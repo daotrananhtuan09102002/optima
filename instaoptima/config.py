@@ -12,6 +12,7 @@ load_dotenv()
 class ExperimentConfig:
     model: str = "gpt-4o-mini"
     operator_model: str | None = None
+    task_model_name: str = "google/flan-t5-base"
     population_size: int = 100
     generations: int = 10
     num_runs: int = 5
@@ -20,11 +21,11 @@ class ExperimentConfig:
     dataset_name: str = "glue"
     dataset_subset: str = "sst2"
     train_split: str = "train"
-    validation_split: str = "validation"
+    validation_split: str | None = "validation"
     test_split: str = "test"
-    train_sample_size: int = 1000
-    validation_sample_size: int = 1000
-    test_sample_size: int = 1000
+    train_sample_size: int | None = 1000
+    validation_sample_size: int | None = 1000
+    test_sample_size: int | None = None
     local_train_path: str | None = None
     local_validation_path: str | None = None
     local_test_path: str | None = None
@@ -44,6 +45,19 @@ class ExperimentConfig:
     optimization_eval_sample_size: int | None = None
     max_generation_tokens: int = 500
     max_examples: int = 2
+    task_model_train_epochs: float = 1.0
+    task_model_learning_rate: float = 5e-5
+    task_model_weight_decay: float = 0.0
+    task_model_warmup_ratio: float = 0.0
+    task_model_train_batch_size: int = 4
+    task_model_eval_batch_size: int = 8
+    task_model_gradient_accumulation_steps: int = 1
+    task_model_max_source_length: int = 512
+    task_model_max_target_length: int = 16
+    task_model_generation_max_new_tokens: int = 8
+    task_model_device: str = "auto"
+    task_model_cache_dir: str | None = None
+    task_model_artifact_dir: str | None = None
     minimization_objectives: str = (
         "- Minimize the instruction performance objective value.\n"
         "- Minimize the instruction length.\n"
@@ -58,7 +72,7 @@ class ExperimentConfig:
         "macro_recall",
     )
     perplexity_model_name: str = "roberta-base"
-    random_replacement_ratio: float = 0.1
+    random_replacement_ratio: float = 0.0
     openai_api_key: str | None = os.getenv("OPENAI_API_KEY")
 
     @classmethod
