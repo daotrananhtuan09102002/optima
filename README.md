@@ -1,91 +1,151 @@
-# InstaOptima Refactor
+# InstaOptima
 
-Project này tách lại từ script thực nghiệm ban đầu để dễ quản lý, và hiện đã chuyển sang luồng thực nghiệm gần với paper InstaOptima hơn:
+InstaOptima is an instruction optimization framework for text classification and Aspect-Based Sentiment Analysis (ABSA).
+It combines evolutionary search with multi-objective selection to discover high-quality instructions.
 
-- dùng `google/flan-t5-base` làm task model để fine-tune và đánh giá từng instruction
-- dùng mô hình OpenAI làm toán tử sinh offspring (`definition/example mutation/crossover`)
-- tiến hóa theo vòng lặp `P -> Q -> P ∪ Q -> NSGA-II selection`
-- lưu objective của từng cá thể, không reevaluate cha mẹ ở mỗi generation
+## Highlights
 
-## Cấu trúc
+- Uses OpenAI models to generate offspring instructions through mutation and crossover operators.
+- Uses `google/flan-t5-base` as the task model to evaluate each candidate instruction.
+- Optimizes multiple objectives simultaneously (performance objective, instruction length, and perplexity).
+- Applies NSGA-II style survivor selection on the loop `P -> Q -> P U Q -> next P`.
+- Stores full per-run artifacts, including Pareto front and final population.
 
-- `instaoptima/config.py`: cấu hình thí nghiệm
-- `instaoptima/llm_client.py`: gọi OpenAI API cho các evolution operators
-- `instaoptima/data_loader.py`: tải dữ liệu Hugging Face hoặc local train/validation/test
-- `instaoptima/flan_t5_evaluator.py`: fine-tune và suy luận với Flan-T5-base cho từng instruction
-- `instaoptima/instruction.py`: model cho instruction
-- `instaoptima/evaluator.py`: đánh giá metric và objective
-- `instaoptima/perplexity.py`: tính perplexity objective
-- `instaoptima/pareto.py`: non-dominated sorting và NSGA-II style selection
-- `instaoptima/operators.py`: mutation và crossover
-- `instaoptima/population.py`: khởi tạo population ban đầu
-- `instaoptima/runner.py`: vòng lặp thực nghiệm chính
-- `main.py`: entrypoint chạy chương trình
+## Repository Structure
 
-## Chạy thử
+- `main.py`: CLI entrypoint.
+- `instaoptima/config.py`: experiment configuration schema and YAML loading.
+- `instaoptima/runner.py`: end-to-end experiment lifecycle and artifact writing.
+- `instaoptima/data_loader.py`: Hugging Face and local dataset loaders.
+- `instaoptima/flan_t5_evaluator.py`: task-model training/inference for instruction evaluation.
+- `instaoptima/evaluator.py`: metrics, objective computation, and evaluation cache.
+- `instaoptima/operators.py`: instruction mutation and crossover operators.
+- `instaoptima/pareto.py`: non-dominated sorting and crowding-distance based selection.
+- `instaoptima/perplexity.py`: perplexity objective scorer.
+- `instaoptima/population.py`: initial population construction.
+
+## Requirements
+
+- Python 3.10+
+- OpenAI API key
+- Enough compute for repeated Flan-T5 fine-tuning (GPU strongly recommended)
+
+## Installation
 
 ```bash
-cp .env.example .env
-python3 main.py --config config.yaml
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
 ```
 
-File `.env`:
+Create a `.env` file in the project root:
 
 ```env
-OPENAI_API_KEY=your_key
+OPENAI_API_KEY=your_api_key_here
 ```
 
-Lưu ý:
+## Quick Start
 
-- lần chạy đầu sẽ cần tải `google/flan-t5-base` và `roberta-base`
-- chi phí tính toán đã tăng đáng kể vì mỗi instruction được fine-tune riêng trên tập train trước khi đo trên tập test
-- `config.yaml` mặc định dùng `1000` mẫu train và toàn bộ split đánh giá có nhãn
-- với `glue/sst2`, file config mặc định dùng `validation` làm split đánh giá vì split `test` công khai không có label
-
-## Cấu hình YAML
-
-Bạn có thể chỉnh tham số thực nghiệm trong `config.yaml` rồi chạy lại:
+Run with the default configuration:
 
 ```bash
 python3 main.py --config config.yaml
 ```
 
-Để test nhanh end-to-end trước khi chạy cấu hình lớn, có thể dùng preset debug cho ABSA:
+Run ABSA debug preset (small and fast for sanity checks):
 
 ```bash
 python3 main.py --config config_absa_debug.yaml
 ```
 
-Các tham số mới quan trọng:
+## Command-Line Interface
 
-- `task_model_name`: mặc định `google/flan-t5-base`
-- `task_model_train_epochs`
-- `task_model_learning_rate`
-- `task_model_train_batch_size`
-- `task_model_eval_batch_size`
-- `task_model_max_source_length`
-- `task_model_max_target_length`
-- `task_model_generation_max_new_tokens`
-- `task_model_device`
+```bash
+python3 main.py --config <path-to-yaml> [--runs-per-launch N] [--artifact-root <dir>]
+```
 
-## Quy trình hiện tại
+- `--config`: YAML configuration file (default: `config.yaml`).
+- `--runs-per-launch`: number of runs to execute in the current launch.
+- `--artifact-root`: existing artifact directory to continue appending runs.
 
-Code hiện tại chạy theo nhịp:
+This makes it easy to split a long multi-run experiment into several launches.
 
-1. Khởi tạo `M` instruction ban đầu.
-2. Evaluate toàn bộ quần thể ban đầu bằng cách fine-tune `Flan-T5-base` trên tập train và chấm trên tập test.
-3. Mỗi generation sinh đúng `M` offspring từ toàn bộ quần thể cha mẹ.
-4. Mỗi offspring được evaluate ngay sau khi sinh.
-5. Gộp `P ∪ Q` rồi chọn lại `M` cá thể bằng non-dominated sort và crowding distance.
-6. Xuất Pareto front cuối cùng.
+Example:
 
-Để chạy đúng `Laptop14` hoặc `Restaurant14`, bạn nên đổi `dataset_source: local` và cung cấp:
+```bash
+python3 main.py --config config_absa_full.yaml --runs-per-launch 1
+python3 main.py --config config_absa_full.yaml \
+  --artifact-root artifacts/laptop14_absa_YYYYMMDD_HHMMSS \
+  --runs-per-launch 2
+```
 
-- `local_train_path`
-- `local_validation_path`
-- `local_test_path`
-- `task_type: absa`
-- `aspect_field`
-- `label_space`
+## Experiment Flow
 
-Nếu file local chưa tồn tại và `auto_download_local_dataset: true`, loader sẽ tự tải bản ABSA tương ứng từ Hugging Face, tách validation nếu cần, rồi ghi ra các file `local_train_path`, `local_validation_path`, `local_test_path`.
+For each run:
+
+1. Initialize a population of size `M`.
+2. Evaluate all initial candidates with Flan-T5.
+3. For each generation, produce `M` offspring via mutation/crossover.
+4. Evaluate offspring and merge populations (`P U Q`).
+5. Select next generation using non-dominated sorting + crowding distance.
+6. Save final population and Pareto front.
+
+## Configuration Guide
+
+Key configuration groups in YAML:
+
+- Search budget: `population_size`, `generations`, `num_runs`
+- Operator behavior: `model`, `operator_model`, `temperature`, `operator_temperature`, `max_generation_tokens`
+- Data: `dataset_source`, split names, sample sizes, local file paths
+- Task model: `task_model_*` (epochs, LR, batch sizes, lengths, device)
+- Objectives: `minimization_objectives`, `performance_metric_names`, `perplexity_model_name`
+
+Available presets in this repository:
+
+- `config.yaml`: general default config.
+- `config_absa.yaml`: compact ABSA setup.
+- `config_absa_full.yaml`: full ABSA experiment.
+- `config_absa_debug.yaml`: lightweight ABSA debug run.
+
+## Dataset Modes
+
+### Hugging Face mode
+
+Set:
+
+- `dataset_source: huggingface`
+- `dataset_name`, `dataset_subset`, and split names
+
+### Local mode (recommended for ABSA)
+
+Set:
+
+- `dataset_source: local`
+- `local_train_path`, `local_validation_path`, `local_test_path`
+- ABSA-related fields such as `task_type: absa`, `aspect_field`, and `label_space`
+
+If local files do not exist and `auto_download_local_dataset: true`, the loader can auto-materialize supported ABSA datasets into your configured local paths.
+
+## Artifacts
+
+Each launch writes to a timestamped directory under `artifacts/`, for example:
+
+```text
+artifacts/<dataset>_<task>_<timestamp>/
+  config.json
+  summary.json
+  run_1/
+    initial_population.json
+    final_population.json
+    pareto_front.json
+    metrics.json
+    best_instruction.txt
+```
+
+`summary.json` is updated from all completed runs under the artifact root.
+
+## Notes on Runtime Cost
+
+- The first run will download task/perplexity models (for example, Flan-T5 and RoBERTa).
+- Evaluation is compute-intensive because each candidate instruction is trained/evaluated by the task model.
+- For quick validation, start with `config_absa_debug.yaml` before scaling up.
