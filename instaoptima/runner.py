@@ -46,7 +46,7 @@ class InstaOptimaExperiment:
 
     def run(self, num_runs: int | None = None) -> None:
         completed_run_indices = self._existing_run_indices()
-        run_scores = self._load_existing_run_scores(completed_run_indices)
+        run_stats = self._load_existing_run_stats(completed_run_indices)
         completed_runs = len(completed_run_indices)
         target_runs = self.config.num_runs
 
@@ -55,8 +55,8 @@ class InstaOptimaExperiment:
                 "All configured runs are already present in "
                 f"{self.artifact_root} ({completed_runs}/{target_runs})."
             )
-            self._log_run_summary(run_scores, target_runs=target_runs)
-            self._write_summary_artifacts(run_scores, target_runs=target_runs)
+            self._log_run_summary(run_stats, target_runs=target_runs)
+            self._write_summary_artifacts(run_stats, target_runs=target_runs)
             return
 
         requested_runs = target_runs - completed_runs if num_runs is None else num_runs
@@ -82,7 +82,13 @@ class InstaOptimaExperiment:
                 final_pareto or final_population,
                 key=lambda item: item.metrics.get("accuracy", 0.0),
             )
-            run_scores.append(representative.metrics.get("accuracy", 0.0))
+            run_stats.append(
+                {
+                    "accuracy": float(representative.metrics.get("accuracy", 0.0)),
+                    "length": float(representative.objectives.length),
+                    "perplexity": float(representative.objectives.perplexity),
+                }
+            )
             print(
                 "Representative metrics: "
                 f"acc={representative.metrics.get('accuracy', 0.0):.4f}, "
@@ -97,8 +103,8 @@ class InstaOptimaExperiment:
                 representative=representative,
             )
 
-        self._log_run_summary(run_scores, target_runs=target_runs)
-        self._write_summary_artifacts(run_scores, target_runs=target_runs)
+        self._log_run_summary(run_stats, target_runs=target_runs)
+        self._write_summary_artifacts(run_stats, target_runs=target_runs)
 
     def _run_single_experiment(
         self,
@@ -225,21 +231,53 @@ class InstaOptimaExperiment:
             )
 
     @staticmethod
-    def _log_run_summary(run_scores: list[float], target_runs: int | None = None) -> None:
-        if not run_scores:
+    def _log_run_summary(
+        run_stats: list[dict[str, float]],
+        target_runs: int | None = None,
+    ) -> None:
+        if not run_stats:
             return
 
-        mean_score = statistics.mean(run_scores)
-        std_score = statistics.stdev(run_scores) if len(run_scores) > 1 else 0.0
+        accuracy_values = [
+            stat["accuracy"]
+            for stat in run_stats
+            if math.isfinite(stat.get("accuracy", float("nan")))
+        ]
+        length_values = [
+            stat["length"]
+            for stat in run_stats
+            if math.isfinite(stat.get("length", float("nan")))
+        ]
+        perplexity_values = [
+            stat["perplexity"]
+            for stat in run_stats
+            if math.isfinite(stat.get("perplexity", float("nan")))
+        ]
+
+        mean_accuracy = statistics.mean(accuracy_values)
+        std_accuracy = (
+            statistics.stdev(accuracy_values) if len(accuracy_values) > 1 else 0.0
+        )
+        mean_length = statistics.mean(length_values)
+        std_length = statistics.stdev(length_values) if len(length_values) > 1 else 0.0
+        mean_perplexity = statistics.mean(perplexity_values)
+        std_perplexity = (
+            statistics.stdev(perplexity_values) if len(perplexity_values) > 1 else 0.0
+        )
+
         total_label = (
-            f"{len(run_scores)}/{target_runs}"
+            f"{len(run_stats)}/{target_runs}"
             if target_runs is not None
-            else str(len(run_scores))
+            else str(len(run_stats))
         )
         print(
             "\n===== Summary =====\n"
             f"Representative accuracy over {total_label} runs: "
-            f"{mean_score * 100:.2f} +- {std_score * 100:.2f}"
+            f"{mean_accuracy * 100:.2f} +- {std_accuracy * 100:.2f}\n"
+            f"Representative length over {total_label} runs: "
+            f"{mean_length:.2f} +- {std_length:.2f}\n"
+            f"Representative perplexity over {total_label} runs: "
+            f"{mean_perplexity:.4f} +- {std_perplexity:.4f}"
         )
 
     def _create_artifact_root(self) -> Path:
@@ -294,20 +332,38 @@ class InstaOptimaExperiment:
             )
         return indices
 
-    def _load_existing_run_scores(self, run_indices: list[int]) -> list[float]:
-        run_scores: list[float] = []
+    def _load_existing_run_stats(self, run_indices: list[int]) -> list[dict[str, float]]:
+        run_stats: list[dict[str, float]] = []
         for run_index in run_indices:
             metrics_path = self.artifact_root / f"run_{run_index}" / "metrics.json"
             payload = json.loads(metrics_path.read_text(encoding="utf-8"))
             representative = payload.get("representative", {})
             metrics = representative.get("metrics", {})
+            objectives = representative.get("objectives", {})
             accuracy = metrics.get("accuracy")
             if accuracy is None:
                 raise ValueError(
                     f"Missing representative accuracy in {metrics_path}."
                 )
-            run_scores.append(float(accuracy))
-        return run_scores
+            length = objectives.get("length")
+            if length is None:
+                raise ValueError(
+                    f"Missing representative length in {metrics_path}."
+                )
+            perplexity = objectives.get("perplexity")
+            if perplexity is None:
+                raise ValueError(
+                    f"Missing representative perplexity in {metrics_path}."
+                )
+
+            run_stats.append(
+                {
+                    "accuracy": float(accuracy),
+                    "length": float(length),
+                    "perplexity": float(perplexity),
+                }
+            )
+        return run_stats
 
     def _write_run_artifacts(
         self,
@@ -353,28 +409,553 @@ class InstaOptimaExperiment:
 
     def _write_summary_artifacts(
         self,
-        run_scores: list[float],
+        run_stats: list[dict[str, float]],
         target_runs: int | None = None,
     ) -> None:
-        if not run_scores:
+        if not run_stats:
             return
 
-        mean_score = statistics.mean(run_scores)
-        std_score = statistics.stdev(run_scores) if len(run_scores) > 1 else 0.0
+        accuracy_values = [
+            stat["accuracy"]
+            for stat in run_stats
+            if math.isfinite(stat.get("accuracy", float("nan")))
+        ]
+        length_values = [
+            stat["length"]
+            for stat in run_stats
+            if math.isfinite(stat.get("length", float("nan")))
+        ]
+        perplexity_values = [
+            stat["perplexity"]
+            for stat in run_stats
+            if math.isfinite(stat.get("perplexity", float("nan")))
+        ]
+
+        mean_accuracy = statistics.mean(accuracy_values)
+        std_accuracy = (
+            statistics.stdev(accuracy_values) if len(accuracy_values) > 1 else 0.0
+        )
+        mean_length = statistics.mean(length_values)
+        std_length = statistics.stdev(length_values) if len(length_values) > 1 else 0.0
+        mean_perplexity = statistics.mean(perplexity_values)
+        std_perplexity = (
+            statistics.stdev(perplexity_values) if len(perplexity_values) > 1 else 0.0
+        )
         summary = {
-            "num_runs": len(run_scores),
-            "target_num_runs": target_runs if target_runs is not None else len(run_scores),
-            "representative_accuracy_scores": run_scores,
-            "mean_accuracy": mean_score,
-            "std_accuracy": std_score,
+            "num_runs": len(run_stats),
+            "target_num_runs": target_runs if target_runs is not None else len(run_stats),
+            "representative_accuracy_scores": accuracy_values,
+            "representative_length_scores": length_values,
+            "representative_perplexity_scores": perplexity_values,
+            "mean_accuracy": mean_accuracy,
+            "std_accuracy": std_accuracy,
+            "mean_length": mean_length,
+            "std_length": std_length,
+            "mean_perplexity": mean_perplexity,
+            "std_perplexity": std_perplexity,
         }
+
+        pareto_points = self._collect_pareto_points()
+        figure_path = self._write_tradeoff_figure(pareto_points)
+        representative_run_index = self._select_representative_run_index()
+        final_population_points = self._collect_final_population_points(
+            run_index=representative_run_index
+        )
+        front_figure_path = self._write_fronts_tradeoff_figure(
+            final_population_points,
+            max_fronts=2,
+        )
+        report_path = self._write_tradeoff_report(
+            pareto_points=pareto_points,
+            summary=summary,
+            target_runs=target_runs,
+            figure_path=front_figure_path,
+        )
+        summary["pareto_point_count"] = len(pareto_points)
+        summary["final_population_point_count"] = len(final_population_points)
+        summary["front_figure_run_index"] = representative_run_index
+        summary["fronts_plotted"] = 2
+        summary["tradeoff_figure"] = figure_path.name if figure_path else None
+        summary["tradeoff_fronts_figure"] = (
+            front_figure_path.name if front_figure_path else None
+        )
+        summary["tradeoff_report"] = report_path.name if report_path else None
+
         self._write_json(self.artifact_root / "summary.json", summary)
+
+    def _collect_pareto_points(self) -> list[dict[str, float | int]]:
+        points: list[dict[str, float | int]] = []
+        for run_dir in sorted(self.artifact_root.glob("run_*")):
+            if not run_dir.is_dir():
+                continue
+            try:
+                run_index = int(run_dir.name.split("_", maxsplit=1)[1])
+            except (IndexError, ValueError):
+                continue
+
+            pareto_path = run_dir / "pareto_front.json"
+            if not pareto_path.exists():
+                continue
+
+            payload = json.loads(pareto_path.read_text(encoding="utf-8"))
+            if not isinstance(payload, list):
+                continue
+
+            for item in payload:
+                if not isinstance(item, dict):
+                    continue
+                metrics = item.get("metrics", {})
+                objectives = item.get("objectives", {})
+                examples = item.get("examples", [])
+                if not isinstance(metrics, dict) or not isinstance(objectives, dict):
+                    continue
+
+                accuracy = metrics.get("accuracy")
+                length = objectives.get("length")
+                perplexity = objectives.get("perplexity")
+                if accuracy is None or length is None or perplexity is None:
+                    continue
+                if not (
+                    math.isfinite(float(accuracy))
+                    and math.isfinite(float(length))
+                    and math.isfinite(float(perplexity))
+                ):
+                    continue
+
+                points.append(
+                    {
+                        "run_index": run_index,
+                        "accuracy": float(accuracy),
+                        "length": float(length),
+                        "perplexity": float(perplexity),
+                        "num_examples": int(len(examples)) if isinstance(examples, list) else 0,
+                    }
+                )
+        return points
+
+    def _write_tradeoff_figure(
+        self,
+        pareto_points: list[dict[str, float | int]],
+    ) -> Path | None:
+        if not pareto_points:
+            return None
+
+        try:
+            import matplotlib.pyplot as plt
+        except ImportError:
+            print("matplotlib is not available; skip trade-off figure generation.")
+            return None
+
+        run_indices = sorted(
+            {
+                int(point["run_index"])
+                for point in pareto_points
+            }
+        )
+        cmap = plt.cm.get_cmap("tab10", max(1, len(run_indices)))
+        color_by_run = {
+            run_idx: cmap(position)
+            for position, run_idx in enumerate(run_indices)
+        }
+
+        fig, axes = plt.subplots(1, 3, figsize=(15, 5), constrained_layout=True)
+        for point in pareto_points:
+            run_idx = int(point["run_index"])
+            acc = float(point["accuracy"])
+            length = float(point["length"])
+            ppl = float(point["perplexity"])
+            color = color_by_run[run_idx]
+            label = f"run_{run_idx}"
+
+            axes[0].scatter(acc, length, color=color, alpha=0.85, s=48, label=label)
+            axes[1].scatter(acc, ppl, color=color, alpha=0.85, s=48, label=label)
+            axes[2].scatter(length, ppl, color=color, alpha=0.85, s=48, label=label)
+
+        axes[0].set_xlabel("Accuracy (higher is better)")
+        axes[0].set_ylabel("Length (lower is better)")
+        axes[0].set_title("Accuracy vs Length")
+        axes[0].grid(alpha=0.25)
+
+        axes[1].set_xlabel("Accuracy (higher is better)")
+        axes[1].set_ylabel("Perplexity (lower is better)")
+        axes[1].set_title("Accuracy vs PPL")
+        axes[1].grid(alpha=0.25)
+
+        axes[2].set_xlabel("Length (lower is better)")
+        axes[2].set_ylabel("Perplexity (lower is better)")
+        axes[2].set_title("Length vs PPL")
+        axes[2].grid(alpha=0.25)
+
+        handles, labels = axes[0].get_legend_handles_labels()
+        unique_handles = {}
+        for handle, label in zip(handles, labels):
+            unique_handles[label] = handle
+        if unique_handles:
+            fig.legend(
+                unique_handles.values(),
+                unique_handles.keys(),
+                loc="upper center",
+                ncol=min(len(unique_handles), 6),
+            )
+
+        fig.suptitle(
+            "Pareto Trade-off (Fig.3-style): Accuracy, Length, Perplexity",
+            y=1.02,
+        )
+
+        output_path = self.artifact_root / "tradeoff_fig3_like.png"
+        fig.savefig(output_path, dpi=220, bbox_inches="tight")
+        plt.close(fig)
+        return output_path
+
+    def _collect_final_population_points(
+        self,
+        run_index: int | None = None,
+    ) -> list[dict[str, float | int]]:
+        points: list[dict[str, float | int]] = []
+        for run_dir in sorted(self.artifact_root.glob("run_*")):
+            if not run_dir.is_dir():
+                continue
+            try:
+                parsed_run_index = int(run_dir.name.split("_", maxsplit=1)[1])
+            except (IndexError, ValueError):
+                continue
+
+            if run_index is not None and parsed_run_index != run_index:
+                continue
+
+            population_path = run_dir / "final_population.json"
+            if not population_path.exists():
+                continue
+
+            payload = json.loads(population_path.read_text(encoding="utf-8"))
+            if not isinstance(payload, list):
+                continue
+
+            for item in payload:
+                if not isinstance(item, dict):
+                    continue
+                metrics = item.get("metrics", {})
+                objectives = item.get("objectives", {})
+                examples = item.get("examples", [])
+                if not isinstance(metrics, dict) or not isinstance(objectives, dict):
+                    continue
+
+                performance = objectives.get("performance")
+                length = objectives.get("length")
+                perplexity = objectives.get("perplexity")
+                accuracy = metrics.get("accuracy")
+                if (
+                    performance is None
+                    or length is None
+                    or perplexity is None
+                    or accuracy is None
+                ):
+                    continue
+                if not (
+                    math.isfinite(float(performance))
+                    and math.isfinite(float(length))
+                    and math.isfinite(float(perplexity))
+                    and math.isfinite(float(accuracy))
+                ):
+                    continue
+
+                points.append(
+                    {
+                        "run_index": parsed_run_index,
+                        "performance": float(performance),
+                        "length": float(length),
+                        "perplexity": float(perplexity),
+                        "accuracy": float(accuracy),
+                        "num_examples": int(len(examples)) if isinstance(examples, list) else 0,
+                    }
+                )
+        return points
+
+    def _select_representative_run_index(self) -> int | None:
+        run_candidates: list[tuple[int, float]] = []
+        for run_dir in sorted(self.artifact_root.glob("run_*")):
+            if not run_dir.is_dir():
+                continue
+            try:
+                run_index = int(run_dir.name.split("_", maxsplit=1)[1])
+            except (IndexError, ValueError):
+                continue
+
+            metrics_path = run_dir / "metrics.json"
+            if not metrics_path.exists():
+                continue
+
+            payload = json.loads(metrics_path.read_text(encoding="utf-8"))
+            representative = payload.get("representative", {})
+            metrics = representative.get("metrics", {})
+            accuracy = metrics.get("accuracy")
+            if accuracy is None:
+                continue
+            run_candidates.append((run_index, float(accuracy)))
+
+        if not run_candidates:
+            return None
+
+        run_candidates.sort(key=lambda item: (-item[1], item[0]))
+        return run_candidates[0][0]
+
+    @staticmethod
+    def _point_dominates(
+        candidate: dict[str, float | int],
+        competitor: dict[str, float | int],
+    ) -> bool:
+        candidate_values = (
+            float(candidate["performance"]),
+            float(candidate["length"]),
+            float(candidate["perplexity"]),
+        )
+        competitor_values = (
+            float(competitor["performance"]),
+            float(competitor["length"]),
+            float(competitor["perplexity"]),
+        )
+        return (
+            all(c <= o for c, o in zip(candidate_values, competitor_values))
+            and any(c < o for c, o in zip(candidate_values, competitor_values))
+        )
+
+    def _non_dominated_fronts_from_points(
+        self,
+        points: list[dict[str, float | int]],
+        max_fronts: int = 3,
+    ) -> list[list[dict[str, float | int]]]:
+        if not points:
+            return []
+
+        remaining = list(points)
+        fronts: list[list[dict[str, float | int]]] = []
+        while remaining and len(fronts) < max_fronts:
+            current_front: list[dict[str, float | int]] = []
+            for point in remaining:
+                is_dominated = False
+                for other in remaining:
+                    if point is other:
+                        continue
+                    if self._point_dominates(other, point):
+                        is_dominated = True
+                        break
+                if not is_dominated:
+                    current_front.append(point)
+
+            if not current_front:
+                break
+
+            fronts.append(current_front)
+            remaining_ids = {id(point) for point in current_front}
+            remaining = [point for point in remaining if id(point) not in remaining_ids]
+
+        return fronts
+
+    def _write_fronts_tradeoff_figure(
+        self,
+        final_population_points: list[dict[str, float | int]],
+        max_fronts: int = 2,
+    ) -> Path | None:
+        if not final_population_points:
+            return None
+
+        try:
+            import matplotlib.pyplot as plt
+        except ImportError:
+            print("matplotlib is not available; skip fronts-based trade-off figure generation.")
+            return None
+
+        fronts = self._non_dominated_fronts_from_points(
+            final_population_points,
+            max_fronts=max_fronts,
+        )
+        if not fronts:
+            return None
+
+        colors = ["red", "green", "blue"]
+        labels = ["Front 1", "Front 2", "Front 3"]
+
+        fig, axes = plt.subplots(3, 1, figsize=(6, 12), constrained_layout=True)
+        for front_index, front in enumerate(fronts):
+            color = colors[front_index]
+            label = labels[front_index]
+            for point in front:
+                performance = float(point["performance"])
+                length = float(point["length"])
+                perplexity = float(point["perplexity"])
+
+                axes[0].scatter(
+                    performance,
+                    perplexity,
+                    color=color,
+                    s=28,
+                    alpha=0.9,
+                    label=label,
+                )
+                axes[1].scatter(
+                    performance,
+                    length,
+                    color=color,
+                    s=28,
+                    alpha=0.9,
+                    label=label,
+                )
+                axes[2].scatter(
+                    perplexity,
+                    length,
+                    color=color,
+                    s=28,
+                    alpha=0.9,
+                    label=label,
+                )
+
+        axes[0].set_xlabel("Performance")
+        axes[0].set_ylabel("Perplexity")
+        axes[0].grid(alpha=0.25)
+
+        axes[1].set_xlabel("Performance")
+        axes[1].set_ylabel("Length")
+        axes[1].grid(alpha=0.25)
+
+        axes[2].set_xlabel("Perplexity")
+        axes[2].set_ylabel("Length")
+        axes[2].grid(alpha=0.25)
+
+        for axis in axes:
+            handles, handle_labels = axis.get_legend_handles_labels()
+            unique_handles: dict[str, object] = {}
+            for handle, handle_label in zip(handles, handle_labels):
+                if handle_label not in unique_handles:
+                    unique_handles[handle_label] = handle
+            if unique_handles:
+                axis.legend(unique_handles.values(), unique_handles.keys(), loc="best")
+
+        front_label = "Front 1-2" if max_fronts == 2 else f"Front 1-{max_fronts}"
+        fig.suptitle(f"Fig.3-style 2D Pareto Fronts ({front_label})", y=1.01)
+        output_path = self.artifact_root / "tradeoff_fig3_fronts.png"
+        fig.savefig(output_path, dpi=220, bbox_inches="tight")
+        plt.close(fig)
+        return output_path
+
+    def _write_tradeoff_report(
+        self,
+        pareto_points: list[dict[str, float | int]],
+        summary: dict[str, object],
+        target_runs: int | None,
+        figure_path: Path | None,
+    ) -> Path | None:
+        if not pareto_points:
+            return None
+
+        acc_values = [float(point["accuracy"]) for point in pareto_points]
+        length_values = [float(point["length"]) for point in pareto_points]
+        ppl_values = [float(point["perplexity"]) for point in pareto_points]
+        example_counts = [int(point.get("num_examples", 0)) for point in pareto_points]
+
+        def _pearson(x: list[float], y: list[float]) -> float:
+            if len(x) != len(y) or len(x) < 2:
+                return 0.0
+            mean_x = statistics.mean(x)
+            mean_y = statistics.mean(y)
+            numerator = sum((xi - mean_x) * (yi - mean_y) for xi, yi in zip(x, y))
+            denom_x = math.sqrt(sum((xi - mean_x) ** 2 for xi in x))
+            denom_y = math.sqrt(sum((yi - mean_y) ** 2 for yi in y))
+            denominator = denom_x * denom_y
+            if denominator == 0:
+                return 0.0
+            return numerator / denominator
+
+        acc_len_corr = _pearson(acc_values, length_values)
+        acc_ppl_corr = _pearson(acc_values, ppl_values)
+        len_ppl_corr = _pearson(length_values, ppl_values)
+
+        shot_distribution: dict[int, int] = {}
+        length_by_shot: dict[int, list[float]] = {}
+        for point in pareto_points:
+            num_examples = int(point.get("num_examples", 0))
+            shot_distribution[num_examples] = shot_distribution.get(num_examples, 0) + 1
+            length_by_shot.setdefault(num_examples, []).append(float(point["length"]))
+
+        run_count = int(summary.get("num_runs", len({int(p["run_index"]) for p in pareto_points})))
+        target = target_runs if target_runs is not None else run_count
+
+        lines = [
+            "# Trade-off Report",
+            "",
+            f"Runs aggregated: {run_count}/{target}",
+            f"Pareto points used: {len(pareto_points)}",
+            "",
+            "## Representative Metrics (across runs)",
+            (
+                "- Accuracy: "
+                f"{float(summary['mean_accuracy']) * 100:.2f} +- {float(summary['std_accuracy']) * 100:.2f}"
+            ),
+            (
+                "- Length: "
+                f"{float(summary['mean_length']):.2f} +- {float(summary['std_length']):.2f}"
+            ),
+            (
+                "- Perplexity: "
+                f"{float(summary['mean_perplexity']):.4f} +- {float(summary['std_perplexity']):.4f}"
+            ),
+            "",
+            "## Pareto Point Ranges",
+            f"- Accuracy min/max: {min(acc_values):.4f} / {max(acc_values):.4f}",
+            f"- Length min/max: {min(length_values):.2f} / {max(length_values):.2f}",
+            f"- Perplexity min/max: {min(ppl_values):.4f} / {max(ppl_values):.4f}",
+            "",
+            "## Pairwise Trade-off Correlation (Pearson)",
+            f"- Accuracy vs Length: {acc_len_corr:.4f}",
+            f"- Accuracy vs Perplexity: {acc_ppl_corr:.4f}",
+            f"- Length vs Perplexity: {len_ppl_corr:.4f}",
+            "",
+            "## Example Count Distribution on Pareto Points",
+            f"- Mean #examples: {statistics.mean(example_counts):.2f}",
+        ]
+
+        for num_examples in sorted(shot_distribution):
+            point_count = shot_distribution[num_examples]
+            share = point_count / len(pareto_points) * 100.0
+            lines.append(
+                f"- {num_examples} example(s): {point_count} point(s) ({share:.1f}%)"
+            )
+
+        lines.extend(
+            [
+                "",
+                "## Length by Example Count",
+            ]
+        )
+        for num_examples in sorted(length_by_shot):
+            lengths = length_by_shot[num_examples]
+            mean_len = statistics.mean(lengths)
+            std_len = statistics.stdev(lengths) if len(lengths) > 1 else 0.0
+            lines.append(
+                f"- {num_examples} example(s): {mean_len:.2f} +- {std_len:.2f}"
+            )
+
+        lines.extend(
+            [
+                "",
+            "## Artifacts",
+            (
+                f"- Figure (paper-style fronts): {figure_path.name}"
+                if figure_path is not None
+                else "- Figure (paper-style fronts): not generated"
+            ),
+            ]
+        )
+
+        output_path = self.artifact_root / "tradeoff_report.md"
+        output_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        return output_path
 
     @staticmethod
     def _normalized_config(payload: dict[str, object]) -> dict[str, object]:
         normalized = dict(payload)
         normalized.pop("openai_api_key", None)
-        return normalized
+        return json.loads(json.dumps(normalized, ensure_ascii=False, sort_keys=True))
 
     def _serialize_instruction(self, instruction: Instruction) -> dict[str, object]:
         return {

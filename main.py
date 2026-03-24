@@ -9,11 +9,13 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--config",
+        "-c",
         default="config.yaml",
         help="Path to YAML config file.",
     )
     parser.add_argument(
         "--runs-per-launch",
+        "-r",
         type=int,
         default=None,
         help=(
@@ -23,6 +25,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--artifact-root",
+        "-a",
         type=Path,
         default=None,
         help=(

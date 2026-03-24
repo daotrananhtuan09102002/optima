@@ -5,11 +5,12 @@ from instaoptima.instruction import Instruction
 
 try:
     import torch
-    from transformers import RobertaForMaskedLM, RobertaTokenizerFast
+    from transformers import AutoConfig, AutoTokenizer, RobertaForMaskedLM
 except ImportError:  # pragma: no cover
     torch = None
+    AutoConfig = None
+    AutoTokenizer = None
     RobertaForMaskedLM = None
-    RobertaTokenizerFast = None
 
 
 class PromptPerplexityScorer:
@@ -22,9 +23,10 @@ class PromptPerplexityScorer:
         self._backend_unavailable = False
 
     def score(self, instruction: Instruction) -> float:
-        prompt_text = instruction.definition
+        prompt_text = instruction.full_instruction_text
         if (
-            RobertaTokenizerFast is None
+            AutoTokenizer is None
+            or AutoConfig is None
             or RobertaForMaskedLM is None
             or torch is None
         ):
@@ -38,32 +40,26 @@ class PromptPerplexityScorer:
             return float(len(prompt_text.split()))
         encoded = tokenizer(prompt_text, return_tensors="pt", truncation=True)
         input_ids = encoded["input_ids"]
-        attention_mask = encoded["attention_mask"]
-
-        total_loss = 0.0
         token_count = input_ids.size(1)
-        if token_count <= 2:
+        if token_count == 0:
             return 0.0
 
-        for index in range(1, token_count - 1):
-            masked_ids = input_ids.clone()
-            masked_ids[0, index] = tokenizer.mask_token_id
-            with torch.no_grad():
-                outputs = model(
-                    input_ids=masked_ids,
-                    attention_mask=attention_mask,
-                    labels=input_ids,
-                )
-            total_loss += outputs.loss.item()
+        with torch.no_grad():
+            outputs = model(
+                input_ids=input_ids,
+                attention_mask=encoded.get("attention_mask"),
+                labels=input_ids,
+            )
 
-        return math.exp(total_loss / (token_count - 2))
+        # Match the paper's implementation: exp(mlm_loss / token_count).
+        return math.exp(outputs.loss.item() / token_count)
 
     def _get_tokenizer(self):
         if self._backend_unavailable:
             return None
         if self._tokenizer is None:
             try:
-                self._tokenizer = RobertaTokenizerFast.from_pretrained(
+                self._tokenizer = AutoTokenizer.from_pretrained(
                     self.config.perplexity_model_name
                 )
             except (ImportError, OSError):  # pragma: no cover
@@ -76,11 +72,20 @@ class PromptPerplexityScorer:
             return None
         if self._model is None:
             try:
-                self._model = RobertaForMaskedLM.from_pretrained(
+                model_config = AutoConfig.from_pretrained(
                     self.config.perplexity_model_name
+                )
+                self._model = RobertaForMaskedLM.from_pretrained(
+                    self.config.perplexity_model_name,
+                    config=model_config,
                 )
             except (ImportError, OSError):  # pragma: no cover
                 self._backend_unavailable = True
                 return None
             self._model.eval()
+            print(
+                "Loaded perplexity model "
+                f"'{self.config.perplexity_model_name}' successfully; "
+                "using RoBERTa MLM scoring (not pseudo/fallback)."
+            )
         return self._model

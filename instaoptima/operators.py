@@ -15,7 +15,9 @@ class EvolutionOperators:
 
     def mutate_definition(self, instruction: Instruction) -> Instruction:
         prompt = self._build_definition_mutation_prompt(instruction)
-        new_definition = self._generate_operator_output(prompt)
+        new_definition = self._clean_definition_output(
+            self._generate_operator_output(prompt)
+        )
         return Instruction(new_definition, instruction.examples)
 
     def mutate_example(self, instruction: Instruction) -> Instruction:
@@ -34,7 +36,9 @@ class EvolutionOperators:
             first,
             second,
         )
-        new_definition = self._generate_operator_output(prompt)
+        new_definition = self._clean_definition_output(
+            self._generate_operator_output(prompt)
+        )
         return Instruction(new_definition, first.examples)
 
     def crossover_example(self, first: Instruction, second: Instruction) -> Instruction:
@@ -53,14 +57,15 @@ class EvolutionOperators:
 
     def _build_definition_mutation_prompt(self, instruction: Instruction) -> str:
         return (
-            "I want you to be a professional prompt engineer. "
-            "Now I am working on the multi-objective evolutionary prompt "
-            "optimization, and I need your help to design and optimize the "
-            "template prompt. Here I give you an example template prompt, "
-            "please understand the meaning of the prompt and modify it. "
-            "Given the minimization objectives, please be creative and output "
-            "the paraphrased or mutated prompt. Please remove Minimization "
-            "objectives in the output.\n\n"
+            "You are optimizing a task instruction for evolutionary search. "
+            "Rewrite the template prompt to preserve the same task intent while "
+            "improving performance under the objectives.\n\n"
+            "Output requirements:\n"
+            "- Output only the rewritten prompt text.\n"
+            "- Do not include explanations, prefixes, markdown, or quotes.\n"
+            "- Do not include phrases like 'Certainly', 'Here is', 'paraphrased', "
+            "or 'optimized version'.\n"
+            "- Return exactly one instruction paragraph.\n\n"
             f"Minimization objectives:\n{self.config.minimization_objectives}\n\n"
             f"Objective values:\n{instruction.objective_summary()}\n\n"
             f"Template prompt:\n{instruction.definition}"
@@ -72,14 +77,15 @@ class EvolutionOperators:
         second_instruction: Instruction,
     ) -> str:
         return (
-            "I want you to be a professional prompt engineer. Now I am working "
-            "on the multi-objective evolutionary prompt optimization for "
-            "sentiment analysis, and I need your help to design and optimize "
-            "the template prompt. Here I give you two template prompts, "
-            "please understand the meaning of the two prompts and crossover "
-            "them into a new prompt. Given the minimization objectives, please "
-            "be creative and output the generated new prompt based on the two "
-            "examples. Please remove Minimization objectives in the output.\n\n"
+            "You are optimizing a task instruction for evolutionary search. "
+            "Combine the strengths of two template prompts into one improved "
+            "instruction that keeps the original task intent.\n\n"
+            "Output requirements:\n"
+            "- Output only the final merged prompt text.\n"
+            "- Do not include explanations, prefixes, markdown, or quotes.\n"
+            "- Do not include phrases like 'Certainly', 'Here is', 'rephrased', "
+            "or 'optimized version'.\n"
+            "- Return exactly one instruction paragraph.\n\n"
             f"Minimization objectives:\n{self.config.minimization_objectives}\n\n"
             f"Template prompt 1:\n{first_instruction.definition}\n"
             f"Objective values 1:\n{first_instruction.objective_summary()}\n\n"
@@ -181,3 +187,33 @@ class EvolutionOperators:
         if not parsed_examples:
             return fallback_examples
         return parsed_examples[: self.config.max_examples]
+
+    def _clean_definition_output(self, raw_text: str) -> str:
+        cleaned = raw_text.strip()
+
+        cleaned = re.sub(r"^\s*```(?:\w+)?\s*", "", cleaned)
+        cleaned = re.sub(r"\s*```\s*$", "", cleaned)
+        cleaned = cleaned.strip()
+
+        chatty_prefix_pattern = re.compile(
+            r"^(?:"
+            r"(?:certainly|sure|of course|absolutely|great)\W+"
+            r"|(?:here(?:'s| is)?\s+(?:a\s+)?)"
+            r"|(?:the\s+(?:rephrased|paraphrased|optimized|improved)\s+version\s*(?:is)?\W*)"
+            r"|(?:rephrased\s+prompt\s*[:\-])"
+            r"|(?:optimized\s+prompt\s*[:\-])"
+            r")",
+            flags=re.IGNORECASE,
+        )
+        cleaned = chatty_prefix_pattern.sub("", cleaned).strip()
+
+        # If the model wraps the instruction in quotes after an intro, keep only quoted content.
+        quoted_match = re.search(r'"([^"\n]{20,})"', cleaned)
+        if quoted_match:
+            cleaned = quoted_match.group(1).strip()
+
+        cleaned = cleaned.strip(" \n\t\"'`")
+
+        if not cleaned:
+            return raw_text.strip()
+        return cleaned

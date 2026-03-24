@@ -58,7 +58,17 @@ class Instruction:
 
     @property
     def character_length(self) -> int:
-        return len(self.definition)
+        return len(self.full_instruction_text)
+
+    @property
+    def full_instruction_text(self) -> str:
+        example_block = "\n\n".join(
+            self._format_objective_example(example_item)
+            for example_item in self.examples
+        )
+        if example_block:
+            return f"{self.definition}\n\n{example_block}"
+        return self.definition
 
     def objective_summary(self) -> str:
         return (
@@ -94,3 +104,11 @@ class Instruction:
         if config.label_space:
             return ", ".join(config.label_space)
         return "positive, negative"
+
+    @staticmethod
+    def _format_objective_example(example: TaskExample) -> str:
+        lines = [f"Sentence: {example.text}"]
+        if example.aspect:
+            lines.append(f"Aspect: {example.aspect}")
+        lines.append(f"Label: {example.label}")
+        return "\n".join(lines)
