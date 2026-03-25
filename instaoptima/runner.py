@@ -132,8 +132,14 @@ class InstaOptimaExperiment:
                 train_dataset,
                 test_dataset,
             )
+            combined_population = population + offspring
+            self._write_generation_union_artifacts(
+                run_index=run_index,
+                generation=generation,
+                combined_population=combined_population,
+            )
             population, generation_pareto = select_next_population(
-                population=population + offspring,
+                population=combined_population,
                 population_size=self.config.population_size,
             )
             self._log_population(population, title="Selected Population")
@@ -407,6 +413,19 @@ class InstaOptimaExperiment:
             [self._serialize_instruction(instruction) for instruction in population],
         )
 
+    def _write_generation_union_artifacts(
+        self,
+        run_index: int,
+        generation: int,
+        combined_population: list[Instruction],
+    ) -> None:
+        run_dir = self.artifact_root / f"run_{run_index + 1}"
+        run_dir.mkdir(parents=True, exist_ok=True)
+        self._write_json(
+            run_dir / f"generation_{generation}_union.json",
+            [self._serialize_instruction(instruction) for instruction in combined_population],
+        )
+
     def _write_summary_artifacts(
         self,
         run_stats: list[dict[str, float]],
@@ -458,12 +477,21 @@ class InstaOptimaExperiment:
         pareto_points = self._collect_pareto_points()
         figure_path = self._write_tradeoff_figure(pareto_points)
         representative_run_index = self._select_representative_run_index()
+        generation_union_points = self._collect_generation_union_points(
+            run_index=representative_run_index
+        )
         final_population_points = self._collect_final_population_points(
             run_index=representative_run_index
         )
+        front_points = generation_union_points or final_population_points
+        front_point_source = (
+            "generation_union"
+            if generation_union_points
+            else "final_population"
+        )
         front_figure_path = self._write_fronts_tradeoff_figure(
-            final_population_points,
-            max_fronts=2,
+            front_points,
+            max_fronts=3,
         )
         report_path = self._write_tradeoff_report(
             pareto_points=pareto_points,
@@ -472,9 +500,12 @@ class InstaOptimaExperiment:
             figure_path=front_figure_path,
         )
         summary["pareto_point_count"] = len(pareto_points)
+        summary["generation_union_point_count"] = len(generation_union_points)
         summary["final_population_point_count"] = len(final_population_points)
+        summary["front_figure_point_count"] = len(front_points)
+        summary["front_figure_point_source"] = front_point_source
         summary["front_figure_run_index"] = representative_run_index
-        summary["fronts_plotted"] = 2
+        summary["fronts_plotted"] = 3
         summary["tradeoff_figure"] = figure_path.name if figure_path else None
         summary["tradeoff_fronts_figure"] = (
             front_figure_path.name if front_figure_path else None
@@ -670,6 +701,66 @@ class InstaOptimaExperiment:
                         "num_examples": int(len(examples)) if isinstance(examples, list) else 0,
                     }
                 )
+        return points
+
+    def _collect_generation_union_points(
+        self,
+        run_index: int | None = None,
+    ) -> list[dict[str, float | int]]:
+        points: list[dict[str, float | int]] = []
+        for run_dir in sorted(self.artifact_root.glob("run_*")):
+            if not run_dir.is_dir():
+                continue
+            try:
+                parsed_run_index = int(run_dir.name.split("_", maxsplit=1)[1])
+            except (IndexError, ValueError):
+                continue
+
+            if run_index is not None and parsed_run_index != run_index:
+                continue
+
+            for union_path in sorted(run_dir.glob("generation_*_union.json")):
+                payload = json.loads(union_path.read_text(encoding="utf-8"))
+                if not isinstance(payload, list):
+                    continue
+                for item in payload:
+                    if not isinstance(item, dict):
+                        continue
+                    metrics = item.get("metrics", {})
+                    objectives = item.get("objectives", {})
+                    examples = item.get("examples", [])
+                    if not isinstance(metrics, dict) or not isinstance(objectives, dict):
+                        continue
+
+                    performance = objectives.get("performance")
+                    length = objectives.get("length")
+                    perplexity = objectives.get("perplexity")
+                    accuracy = metrics.get("accuracy")
+                    if (
+                        performance is None
+                        or length is None
+                        or perplexity is None
+                        or accuracy is None
+                    ):
+                        continue
+                    if not (
+                        math.isfinite(float(performance))
+                        and math.isfinite(float(length))
+                        and math.isfinite(float(perplexity))
+                        and math.isfinite(float(accuracy))
+                    ):
+                        continue
+
+                    points.append(
+                        {
+                            "run_index": parsed_run_index,
+                            "performance": float(performance),
+                            "length": float(length),
+                            "perplexity": float(perplexity),
+                            "accuracy": float(accuracy),
+                            "num_examples": int(len(examples)) if isinstance(examples, list) else 0,
+                        }
+                    )
         return points
 
     def _select_representative_run_index(self) -> int | None:

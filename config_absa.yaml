@@ -27,7 +27,7 @@ shuffle_seed: 42
 temperature: 1.0
 operator_temperature: 1.0
 max_generation_tokens: 500
-max_examples: 2
+max_examples: 1
 task_model_train_epochs: 2.0
 task_model_learning_rate: 5.0e-5
 task_model_train_batch_size: 4
@@ -37,7 +37,7 @@ task_model_max_target_length: 16
 task_model_generation_max_new_tokens: 8
 task_model_device: auto
 perplexity_model_name: roberta-base
-random_replacement_ratio: 0.0
+random_replacement_ratio: 0.1
 minimization_objectives: |
   - Minimize the instruction performance objective value.
   - Minimize the instruction length.
