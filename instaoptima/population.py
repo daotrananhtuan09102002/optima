@@ -1,3 +1,5 @@
+import random
+
 from instaoptima.config import ExperimentConfig
 from instaoptima.instruction import Instruction
 from instaoptima.instruction import TaskExample
@@ -10,19 +12,30 @@ class PopulationFactory:
     def create_initial_population(
         self,
         seed_examples: list[TaskExample],
+        run_seed: int | None = None,
     ) -> list[Instruction]:
         base_definitions = self._base_definitions()
         if not seed_examples:
             raise ValueError("At least one seed example is required to initialize population.")
 
+        rng = random.Random(run_seed) if run_seed is not None else None
+        ordered_definitions = list(base_definitions)
+        if rng is not None:
+            rng.shuffle(ordered_definitions)
+
+        example_count = min(self.config.max_examples, len(seed_examples))
+
         population: list[Instruction] = []
         for index in range(self.config.population_size):
-            definition = base_definitions[index % len(base_definitions)]
-            start = index % len(seed_examples)
-            examples = [
-                seed_examples[(start + offset) % len(seed_examples)]
-                for offset in range(min(self.config.max_examples, len(seed_examples)))
-            ]
+            definition = ordered_definitions[index % len(ordered_definitions)]
+            if rng is None:
+                start = index % len(seed_examples)
+                examples = [
+                    seed_examples[(start + offset) % len(seed_examples)]
+                    for offset in range(example_count)
+                ]
+            else:
+                examples = rng.sample(seed_examples, k=example_count)
             population.append(Instruction(definition=definition, examples=examples))
         return population
 

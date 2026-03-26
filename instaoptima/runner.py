@@ -115,7 +115,10 @@ class InstaOptimaExperiment:
         train_dataset = dataset_bundle.train
         test_dataset = dataset_bundle.test
 
-        population = self.population_factory.create_initial_population(train_dataset)
+        population = self.population_factory.create_initial_population(
+            train_dataset,
+            run_seed=self.config.shuffle_seed + run_index,
+        )
         self._evaluate_population(
             population,
             train_dataset,
@@ -141,6 +144,7 @@ class InstaOptimaExperiment:
             population, generation_pareto = select_next_population(
                 population=combined_population,
                 population_size=self.config.population_size,
+                random_replacement_ratio=self.config.random_replacement_ratio,
             )
             self._log_population(population, title="Selected Population")
             self._log_pareto_front(generation_pareto)
