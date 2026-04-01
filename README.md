@@ -144,6 +144,45 @@ artifacts/<dataset>_<task>_<timestamp>/
 
 `summary.json` is updated from all completed runs under the artifact root.
 
+## Evaluate Pareto Quality From Existing Logs
+
+You can evaluate Pareto-front quality from saved artifacts without re-running experiments.
+
+Run:
+
+```bash
+python3 evaluate_pareto_quality.py artifacts/laptop14_absa_20260326_042346
+```
+
+This computes:
+
+- Hypervolume (HV)
+- Generational Distance (GD)
+- Inverted Generational Distance (IGD)
+
+and writes a report to:
+
+```text
+artifacts/laptop14_absa_20260326_042346/pareto_quality.json
+```
+
+Optional:
+
+```bash
+python3 evaluate_pareto_quality.py artifacts/laptop14_absa_20260326_042346 \
+  --reference-point 0.58 450 1.12
+```
+
+Current computation details:
+
+- Objective space is treated as minimization on `(performance, length, perplexity)`.
+- For each run, points are loaded from `run_*/pareto_front.json`.
+- The reference front for GD/IGD is empirical: non-dominated points of the union of all run fronts in the same artifact root.
+- GD/IGD are computed with Euclidean distance after min-max normalization using the empirical reference front ranges.
+- HV is computed against a reference point. If `--reference-point` is not provided, it is inferred as `(observed max) + 5% margin` per objective.
+
+Note: this is a relative comparison across available runs/logs, not an absolute metric against a theoretical true Pareto front.
+
 ## Notes on Runtime Cost
 
 - The first run will download task/perplexity models (for example, Flan-T5 and RoBERTa).
