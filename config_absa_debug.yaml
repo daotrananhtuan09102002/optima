@@ -14,6 +14,8 @@ test_sample_size: 30
 local_train_path: data/laptop14/train.jsonl
 local_validation_path: data/laptop14/validation.jsonl
 local_test_path: data/laptop14/test.jsonl
+auto_download_local_dataset: true
+local_validation_ratio: 0.1
 text_field: sentence
 aspect_field: aspect
 label_field: label
