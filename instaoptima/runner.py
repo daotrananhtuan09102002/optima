@@ -113,7 +113,10 @@ class InstaOptimaExperiment:
     ) -> tuple[list[Instruction], list[Instruction]]:
         random.seed(self.config.shuffle_seed + run_index)
         train_dataset = dataset_bundle.train
-        test_dataset = dataset_bundle.test
+        evaluation_dataset = self._get_required_split(
+            dataset_bundle,
+            self.config.optimization_split,
+        )
 
         population = self.population_factory.create_initial_population(
             train_dataset,
@@ -122,7 +125,7 @@ class InstaOptimaExperiment:
         self._evaluate_population(
             population,
             train_dataset,
-            test_dataset,
+            evaluation_dataset,
             desc="Evaluate initial population",
         )
         self._write_initial_population_artifacts(run_index, population)
@@ -133,7 +136,7 @@ class InstaOptimaExperiment:
             offspring = self._generate_and_evaluate_offspring(
                 population,
                 train_dataset,
-                test_dataset,
+                evaluation_dataset,
             )
             combined_population = population + offspring
             self._write_generation_union_artifacts(
@@ -150,6 +153,27 @@ class InstaOptimaExperiment:
             self._log_pareto_front(generation_pareto)
 
         return population, pareto_front(population)
+
+    def _get_required_split(
+        self,
+        dataset_bundle: DatasetBundle,
+        split_name: str,
+    ):
+        try:
+            split_dataset = dataset_bundle.get_split(split_name)
+        except AttributeError as error:
+            raise ValueError(
+                f"Unsupported dataset split '{split_name}'. "
+                "Expected one of: train, validation, test."
+            ) from error
+
+        if not split_dataset:
+            raise ValueError(
+                f"Configured split '{split_name}' is empty. "
+                "Please provide labeled data for that split or update "
+                "optimization_split in the config."
+            )
+        return split_dataset
 
     def _evaluate_population(
         self,

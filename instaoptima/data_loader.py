@@ -55,6 +55,7 @@ class ExperimentDatasetLoader:
         )
 
     def _load_local_bundle(self) -> DatasetBundle:
+        self._validate_local_split_paths()
         self._ensure_local_dataset_exists()
         return DatasetBundle(
             train=self._load_local_file(
@@ -70,6 +71,29 @@ class ExperimentDatasetLoader:
                 self.config.test_sample_size,
             ),
         )
+
+    def _validate_local_split_paths(self) -> None:
+        if self.config.dataset_source != "local":
+            return
+
+        split_paths = {
+            "train": self.config.local_train_path,
+            "validation": self.config.local_validation_path,
+            "test": self.config.local_test_path,
+        }
+        seen_paths: dict[Path, str] = {}
+        for split_name, raw_path in split_paths.items():
+            if not raw_path:
+                continue
+            normalized_path = Path(raw_path).expanduser().resolve(strict=False)
+            existing_split = seen_paths.get(normalized_path)
+            if existing_split is not None:
+                raise ValueError(
+                    "Local dataset splits must use different files. "
+                    f"Both '{existing_split}' and '{split_name}' point to "
+                    f"'{normalized_path}'."
+                )
+            seen_paths[normalized_path] = split_name
 
     def _ensure_local_dataset_exists(self) -> None:
         local_paths = [

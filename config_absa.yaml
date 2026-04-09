@@ -7,6 +7,7 @@ num_runs: 3
 task_type: absa
 dataset_source: local
 dataset_name: laptop14
+optimization_split: validation
 train_sample_size: 500
 validation_sample_size: null
 test_sample_size: null
