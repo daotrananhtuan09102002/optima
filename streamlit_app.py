@@ -29,7 +29,9 @@ def get_instruction(instruction_path: str):
 
 def main() -> None:
     st.title("InstaOptima ABSA Demo")
-    st.caption("Nhap cau va aspect, app se dung prompt co dinh trong source de goi Flan-T5 va tra ve sentiment.")
+    st.caption(
+        "Enter a sentence and aspect term. The app uses a fixed prompt template from the source code and returns the predicted sentiment."
+    )
 
     with st.sidebar:
         st.subheader("Demo Settings")
@@ -40,8 +42,8 @@ def main() -> None:
             value=str(DEFAULT_DEMO_INSTRUCTION_PATH),
         )
         st.markdown(
-            f"- Config mac dinh: `{Path(config_path)}`\n"
-            f"- Instruction mac dinh: `{Path(instruction_path)}`"
+            f"- Default config: `{Path(config_path)}`\n"
+            f"- Default instruction: `{Path(instruction_path)}`"
         )
 
     config = load_demo_config(config_path)
@@ -64,13 +66,13 @@ def main() -> None:
 
     if submitted:
         if not sentence.strip():
-            st.error("Sentence khong duoc de trong.")
+            st.error("Sentence must not be empty.")
             return
         if config.task_type == "absa" and not aspect.strip():
-            st.error("Aspect khong duoc de trong voi bai toan ABSA.")
+            st.error("Aspect must not be empty for ABSA tasks.")
             return
 
-        with st.spinner("Dang load model va sinh du doan..."):
+        with st.spinner("Loading model and generating prediction..."):
             model, tokenizer = get_model_bundle(model_source, config_path)
             result = generate_prediction(
                 sentence=sentence,

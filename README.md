@@ -94,6 +94,7 @@ Defaults:
 - Config: `config_absa_debug.yaml`
 - Instruction: `artifacts/laptop14_absa_20260409_045620/run_1/best_instruction.txt`
 - Epochs: `10`
+- Prompt mode: `best`
 - Output directory: `models/flan_t5_absa_best_prompt`
 
 Example with a different prompt file or model source:
@@ -104,6 +105,22 @@ python3 train_flan_t5_demo.py \
   --model-source google/flan-t5-base \
   --epochs 10
 ```
+
+To reproduce three prompt conditions:
+
+```bash
+python3 train_flan_t5_demo.py --prompt-mode best
+python3 train_flan_t5_demo.py --prompt-mode random
+python3 train_flan_t5_demo.py --prompt-mode none
+```
+
+This creates:
+
+- `models/flan_t5_absa_best_prompt`
+- `models/flan_t5_absa_random_prompt`
+- `models/flan_t5_absa_none_prompt`
+
+For `random`, the script samples one instruction from `artifacts/laptop14_absa_20260409_045620/run_1/final_population.json`. You can override that pool with `--random-pool-path` and control reproducibility with `--random-seed`.
 
 After training, the Streamlit demo will automatically use `models/flan_t5_absa_best_prompt` if that directory exists.
 

@@ -16,10 +16,11 @@ from instaoptima.instruction import TaskExample
 def fine_tune_and_save(
     *,
     config: ExperimentConfig,
-    instruction: Instruction,
+    instruction: Instruction | None,
     output_dir: str | Path,
     model_source: str | None = None,
     num_train_epochs: float | None = None,
+    prompt_mode: str = "best",
 ) -> dict[str, object]:
     backend = _load_backend()
     torch = backend["torch"]
@@ -52,9 +53,7 @@ def fine_tune_and_save(
     validation_dataset = Dataset.from_list(
         _build_records(validation_examples, instruction, config)
     )
-    test_dataset = Dataset.from_list(
-        _build_records(test_examples, instruction, config)
-    )
+    test_dataset = Dataset.from_list(_build_records(test_examples, instruction, config))
 
     def tokenize_batch(batch: dict[str, list[str]]) -> dict[str, list[list[int]]]:
         model_inputs = tokenizer(
@@ -165,9 +164,14 @@ def fine_tune_and_save(
             else float(config.task_model_train_epochs)
         ),
         "instruction": {
-            "definition": instruction.definition,
-            "examples": [asdict(example) for example in instruction.examples],
+            "definition": instruction.definition if instruction is not None else "",
+            "examples": (
+                [asdict(example) for example in instruction.examples]
+                if instruction is not None
+                else []
+            ),
         },
+        "prompt_mode": prompt_mode,
         "validation_metrics": _to_jsonable_metrics(validation_metrics),
         "test_metrics": test_metrics,
     }
@@ -180,14 +184,15 @@ def fine_tune_and_save(
 
 def _build_records(
     examples: list[TaskExample],
-    instruction: Instruction,
+    instruction: Instruction | None,
     config: ExperimentConfig,
 ) -> list[dict[str, str]]:
     return [
         {
-            "input_text": instruction.build_prompt(
+            "input_text": build_task_prompt(
                 TaskExample(text=example.text, label="", aspect=example.aspect),
                 config,
+                instruction,
             ),
             "target_text": example.label,
         }
@@ -200,7 +205,7 @@ def _predict_labels(
     model,
     tokenizer,
     examples: list[TaskExample],
-    instruction: Instruction,
+    instruction: Instruction | None,
     config: ExperimentConfig,
     torch,
 ) -> list[str]:
@@ -215,9 +220,10 @@ def _predict_labels(
     for start_index in range(0, len(examples), batch_size):
         batch = examples[start_index : start_index + batch_size]
         prompts = [
-            instruction.build_prompt(
+            build_task_prompt(
                 TaskExample(text=example.text, label="", aspect=example.aspect),
                 config,
+                instruction,
             )
             for example in batch
         ]
@@ -256,6 +262,22 @@ def normalize_prediction(raw_prediction: str, config: ExperimentConfig) -> str:
     if "conflict" in prediction:
         return "conflict"
     return prediction
+
+
+def build_task_prompt(
+    example: TaskExample,
+    config: ExperimentConfig,
+    instruction: Instruction | None,
+) -> str:
+    if instruction is not None:
+        return instruction.build_prompt(example, config)
+
+    lines = [f"Sentence: {example.text}"]
+    if config.task_type == "absa" and example.aspect:
+        lines.append(f"Aspect: {example.aspect}")
+    label_hint = ", ".join(config.label_space or [])
+    lines.append(f"Label (only output one of: {label_hint}):")
+    return "\n".join(lines)
 
 
 def compute_classification_metrics(
