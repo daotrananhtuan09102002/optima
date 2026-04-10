@@ -58,6 +58,55 @@ Run ABSA debug preset (small and fast for sanity checks):
 python3 main.py --config config_absa_debug.yaml
 ```
 
+## Streamlit Demo
+
+This repository also includes a simple Streamlit demo to run inference with a fixed prompt template and a Flan-T5 model.
+
+Run:
+
+```bash
+streamlit run streamlit_app.py
+```
+
+Default demo settings:
+
+- Prompt template: `artifacts/laptop14_absa_20260409_045620/run_1/best_instruction.txt`
+- Config: `config_absa_debug.yaml`
+- Model source: `models/flan_t5_absa_best_prompt` if it exists, otherwise `google/flan-t5-base`
+
+If you exported a fine-tuned checkpoint elsewhere, point the demo to it by either:
+
+- changing the `Model source` field in the Streamlit sidebar, or
+- setting `INSTOPTIMA_DEMO_MODEL=/path/to/your/checkpoint`
+
+The current repository artifacts do not contain a saved fine-tuned Flan-T5 checkpoint, so the demo is wired to accept one when you have it available.
+
+## Fine-Tune A Demo Model
+
+To train a reusable Flan-T5 checkpoint from the best discovered instruction and save it for the demo:
+
+```bash
+python3 train_flan_t5_demo.py
+```
+
+Defaults:
+
+- Config: `config_absa_debug.yaml`
+- Instruction: `artifacts/laptop14_absa_20260409_045620/run_1/best_instruction.txt`
+- Epochs: `10`
+- Output directory: `models/flan_t5_absa_best_prompt`
+
+Example with a different prompt file or model source:
+
+```bash
+python3 train_flan_t5_demo.py \
+  --instruction-path artifacts/laptop14_absa_20260409_045620/run_3/best_instruction.txt \
+  --model-source google/flan-t5-base \
+  --epochs 10
+```
+
+After training, the Streamlit demo will automatically use `models/flan_t5_absa_best_prompt` if that directory exists.
+
 ## Command-Line Interface
 
 ```bash

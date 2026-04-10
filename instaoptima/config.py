@@ -2,8 +2,13 @@ from dataclasses import asdict, dataclass
 import os
 from pathlib import Path
 
-from dotenv import load_dotenv
 import yaml
+
+try:
+    from dotenv import load_dotenv
+except ImportError:  # pragma: no cover
+    def load_dotenv() -> None:
+        return None
 
 load_dotenv()
 

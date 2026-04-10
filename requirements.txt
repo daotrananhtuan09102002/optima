@@ -10,3 +10,4 @@ sentencepiece
 scikit-learn
 numpy
 matplotlib
+streamlit
